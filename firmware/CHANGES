@@ -1,0 +1,128 @@
+CHANGES
+
+0.0.0.1 - 11.04.2015
+  deep sleep WLAN station
+
+0.0.0.2 - 12.04.2015
+  vdd33 measurement added
+
+0.0.0.3 - 13.04.2015
+  64 bit time with milliseconds resolution
+
+0.0.0.4 - 14.04.2015
+  client socket connection added
+
+0.0.0.5 - 15.04.2015
+  send TCP request added
+
+0.0.0.6 - 23.04.2015
+  receive TCP reply added
+  time sync added
+
+0.0.0.7 - 24.04.2015
+  configurable downtime
+  valve control time compensation
+  GPIO13 for generator control added
+
+0.0.0.8 - 25.04.2015
+  restore RTC memory before initializing WLAN
+  GPIO4+GPIO5 for valve control added
+
+0.0.0.9 - 26.04.2015
+  GPIO12 for capacitor charging added
+  disable inverted outputs when off
+  disconnect WLAN before going to deep sleep to prevent sporadically
+      increased quiescent current
+  dynamically modify downtime to hit next event time
+
+0.0.0.10 - 27.04.2015
+  dynamically modify downtime fixes
+  send TCP status message after operating valve for immediate feedback
+
+0.0.0.11 - 01.05.2015
+  close valve on low battery
+  upscale downtime to compensate early wakeup
+  use DHCP client when RTC memory is invalid and save IP address in
+      RTC memory for reuse
+
+0.0.0.12 - 02.05.2015
+  decrease downtime to 5 min when valve is open
+
+0.0.0.13 - 03.05.2015
+  configurable downtime scale
+  milliseconds added to TCP reply
+
+0.0.0.14 - 04.05.2015
+  step down downtime while valve is open to 5 minutes
+  WLAN power management debugging
+
+0.0.0.15 - 05.05.2015
+0.0.0.16 - 06.05.2015
+0.0.0.17 - 07.05.2015
+0.0.0.18 - 08.05.2015
+  week scheduler (AUTO mode) preparations
+
+0.0.0.19 - 09.05.2015
+  version added to request message
+  vdd33 (battery) offset added to reply message
+
+0.0.0.20 - 10.05.2015
+  downtime scale overflow fix
+  rework of JSON messages
+  JSON parser signed int bug workaround
+  JSON activity array parser
+
+0.0.0.21 - 12.05.2015
+  cold boot low battery mode fix
+  GPIO14 for manual start/stop
+
+0.0.0.22 - 13.05.2015
+  manual override logic preparations
+
+0.0.0.23 - 14.05.2015
+  manual override
+  sync valve close time when time is synced
+  downtime cutback fix
+
+0.0.0.24 - 15.05.2015
+  init function of all GPIOs for valve
+
+0.0.0.25 - 16.06.2015
+  valve GPIO control improvements
+
+0.0.0.26 - 17.05.2015
+  GPIO swap: 13->15, 4->13, 12->4 (GPIO 0, 2 and 12 are unused)
+  mark all activity slots not contained in JSON message as invalid
+
+0.9.0.0 - 18.05.2015 (1st version with all basic features operational)
+  mark all activity slots as invalid at cold boot
+  weekday formula fix
+  minute of day comparison fix
+
+0.9.0.1 - 20.05.2015
+  improved leap year rule (method esp_gmtime)
+  day of year calculation added (method esp_gmtime)
+  support activity scheduling for every 2nd or 3rd day of the year
+
+0.9.0.2 - 05.06.2015
+  init valve GPIO outputs immediately on startup
+  manual override off resume last activity fix
+  end override when setting mode to OFF
+
+0.9.0.3 - 06.06.2015
+  GPIO swap: 4<->13 (GPIO 0, 2 and 12 are unused)
+
+0.9.0.4 - 07.06.2015
+  send override end time
+
+0.9.0.5 - 12.06.2015
+  skip retries on WLAN connect error
+  use manual duration if activity duration is zero
+  calculate total time the valve was open
+
+0.9.0.6 - 21.06.2015
+  total time calculation fix
+  shutdown delay increased to improve regular TCP disconnect
+
+0.9.0.7 - 12.09.2015
+  documentation added
