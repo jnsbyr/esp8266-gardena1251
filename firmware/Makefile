@@ -31,8 +31,8 @@ ESPBAUD		= 74880
 XTENSA_TOOLS_ROOT	?= c:/Espressif/xtensa-lx106-elf/bin
 
 # Espressif SDK paths
-SDK_BASE		?= c:/Espressif/ESP8266_SDK
-SDK_TOOLS	?= c:/Espressif/utils
+SDK_BASE		?= C:/Espressif/ESP8266_SDK
+SDK_TOOLS	?= C:/Espressif/utils
 ESPTOOL		?= $(SDK_TOOLS)/esptool.exe
 
 
@@ -41,6 +41,7 @@ ESPTOOL		?= $(SDK_TOOLS)/esptool.exe
 #
 
 # Espressif SDK subdirectories
+SDK_BINDIR	= bin
 SDK_LIBDIR	= lib
 SDK_LDDIR	= ld
 SDK_INCDIR	= include include/json
@@ -81,6 +82,7 @@ OBJDUMP		:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objdump
 INCDIR		= $(MODULES) include
 BUILD_BASE	= build
 FW_BASE		= firmware
+SDK_BINDIR	:= $(addprefix $(SDK_BASE)/, $(SDK_BINDIR))
 SDK_LIBDIR	:= $(addprefix $(SDK_BASE)/, $(SDK_LIBDIR))
 SDK_INCDIR	:= $(addprefix -I$(SDK_BASE)/, $(SDK_INCDIR))
 INCDIR		:= $(addprefix -I, $(INCDIR))
@@ -134,6 +136,10 @@ flash: all
                0x00000 $(FW_BASE)/eagle.flash.bin \
                0x40000 $(FW_BASE)/eagle.irom0text.bin
 
+flash-init-data-4M: 
+	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+               0x7C000 $(SDK_BINDIR)/esp_init_data_default.bin
+
 clean:
 	rm -f $(APP_AR)
 	rm -f $(TARGET_OUT)
@@ -141,7 +147,7 @@ clean:
 	rm -rf $(BUILD_BASE)
 	rm -rf $(FW_BASE)
 
-flashId:
+readFlashId:
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) flash_id
 
 readMac:
