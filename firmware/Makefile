@@ -12,16 +12,17 @@
 #
 
 # project name
-TARGET		= sleeper-0.9.0.7
+TARGET		= sleeper-0.9.1.0
 
 # source subdirectories
 MODULES		= user driver
 
 # libraries, mainly provided by the SDK
-LIBS			= c gcc hal phy pp net80211 lwip wpa json main
+LIBS			= c gcc hal phy pp net80211 lwip wpa crypto main json
 
 # ESP8266 flash parameters (dependent on ESP8266 hardware)
-FLASHPARMS	= --flash_freq 40m --flash_mode qio --flash_size 4m
+#FLASHPARMS	= --flash_freq 40m --flash_mode qio --flash_size 4m
+FLASHPARMS	= --flash_freq 40m --flash_mode dio --flash_size 8m
 
 # flash tool parameters (dependent on PC UART hardware)
 ESPPORT		= COM4
@@ -139,6 +140,14 @@ flash: all
 flash-init-data-4M: 
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
                0x7C000 $(SDK_BINDIR)/esp_init_data_default.bin
+
+flash-init-data-8M: 
+	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+               0xFC000 $(SDK_BINDIR)/esp_init_data_default.bin
+
+flash-default-params-8M: 
+	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+               0xFE000 $(SDK_BINDIR)/blank.bin
 
 clean:
 	rm -f $(APP_AR)

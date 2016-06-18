@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,27 +16,25 @@
  *
  *****************************************************************************
  *
- * The author of this file does not claim any copyright or authorship of the
- * algorithms and mathematics used in this file. They are either trivial or
- * based on well documented public knowledge. The credits go to:
- *
- *     Gregorian calendar (1582 AD)
- *     Zeller's congruence algorithm (1882 AD)
- *
- *****************************************************************************
- *
  * project: ESP8266 library enhancements
  *
- * file:    time.h
+ * file:    esp_time.h
  *
  * created: 13.04.2015
  *
  *****************************************************************************/
 
-#ifndef __USER_TIME_H__
-#define __USER_TIME_H__
+#ifndef __USER_ESP_TIME_H__
+#define __USER_ESP_TIME_H__
 
 #include <c_types.h>
+
+/*
+ * constants
+ */
+#define MINUTES_PER_DAY   1440
+#define SECONDS_PER_DAY  86400
+#define SECONDS_PER_HOUR  3600
 
 /*
  * structure for storing time information
@@ -70,4 +68,4 @@ void ICACHE_FLASH_ATTR esp_gmtime(uint64* t, struct ets_tm* tms);
  */
 const char* ICACHE_FLASH_ATTR esp_strptime(const char *s, const char *format, struct ets_tm* tms);
 
-#endif /* __USER_TIME_H__ */
+#endif /* __ESP_TIME_H__ */

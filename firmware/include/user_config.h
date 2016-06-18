@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,8 +33,11 @@
 #define REMOTE_IP   "192.168.0.1"           // IP address of control server
 #define REMOTE_PORT 3030                    // port of control server
 
-#define DEFAULT_DOWNTIME          10000     // milliseconds, 10 s initial deep sleep duration while not configured
-#define DEFAULT_MANUAL_DURATION     600     // seconds, 10 min manual override valve open duration while not configured
-#define MAX_VALVE_OPEN_DOWNTIME  300000     // milliseconds, 5 min maximum downtime while valve is open
+#define DEFAULT_DOWNTIME           10000    // milliseconds, default 10 s initial deep sleep duration while not configured
+#define DEFAULT_MANUAL_DURATION      600    // seconds,      default 10 min manual override valve open duration while not configured
+#define MAX_VALVE_OPEN_DOWNTIME   300000    // milliseconds, default 5 min maximum downtime while valve is open
+
+#define VALVE_DRIVER_TYPE              1    // 1=capacitor, 2=H-bridge
+#define VALVE_OPEN_PULSE_DURATION 200000    // microseconds, recommended 250 ms open pulse duration to open valve
 
 #endif

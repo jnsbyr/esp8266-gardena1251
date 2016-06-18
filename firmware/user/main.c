@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,11 +42,11 @@
  *
  *****************************************************************************
  *
- * @todo shutdown on low bat to prevent battery drain
+ * @todo permanent shutdown on low bat to prevent battery drain
  * @todo improve estimate of totalOpenDuration in manual override mode
  * @todo config of access point parameters in AP mode on initial startup (via mini-webserver?) -> flash
  * @todo UDP service advertisement broadcast for server/port -> flash
- * @todo reset flash config via GPIO
+ * @todo reset flash config (via GPIO?)
  *
  * @todo make UART debug output optional
  *
@@ -62,28 +62,21 @@
 #include <osapi.h>
 #include <user_interface.h>
 #include <json/jsonparse.h>
-#include "time.h"
+#include "esp_time.h"
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.0.7"
+#define VERSION "0.9.1.0"
 
-#define SLEEPER_STATE_MAGIC        0xA4BE
-
-#define DEFAULT_BOOTTIME           87      // milliseconds, kernel startup delay after reset
-#define DEFAULT_DEEP_SLEEP_SCALE   10375   // extend deep sleep duration by 3.75% to compensate for early wakeup by RTC
-
-#define MAX_WLAN_TIME     8000   // milliseconds
-#define WLAN_TIMER_PERIOD  200   // milliseconds
-#define UPLINK_TIMER_PERIOD 20   // milliseconds
+#define SLEEPER_STATE_MAGIC 0xB4B0
 
 // manual start/stop GPIO input
 #define USER_WAKEUP_GPIO_MUX PERIPHS_IO_MUX_MTMS_U
 #define USER_WAKEUP_GPIO_FUNC FUNC_GPIO14
 #define USER_WAKEUP_GPIO 14
 
-LOCAL os_timer_t wlanTimer;
-LOCAL int32 wlanTimeout;
+LOCAL os_timer_t comTimer;
+LOCAL int32 comTimeout;
 LOCAL SleeperStateT state;
 LOCAL struct ets_tm tms;
 LOCAL struct ets_tm nowTMS;
@@ -93,14 +86,15 @@ LOCAL uint8 readyForShutdown;
 LOCAL char txMessage[256];
 LOCAL uint64 nextEventTime;
 
-/** estimate current time in milliseconds
+/**
+ * estimate current time in milliseconds
  */
-uint64 ICACHE_FLASH_ATTR getTime()
+uint64 getTime()
 {
   return state.rtcMem.lastShutdownTime + state.rtcMem.lastDowntime + state.rtcMem.boottime + system_get_time()/1000;
 }
 
-LOCAL const char* getSleeperModeAsText()
+LOCAL const char* ICACHE_FLASH_ATTR getSleeperModeAsText()
 {
   if (state.rtcMem.lowBattery)
   {
@@ -122,7 +116,8 @@ LOCAL const char* getSleeperModeAsText()
   }
 }
 
-/** check if GPIO 14 has low level = wakeup by user
+/**
+ * check if GPIO 14 has low level = wakeup by user
  */
 LOCAL uint8 isUserWakeup()
 {
@@ -263,12 +258,15 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
           type = jsonparse_next(&jsonParser);
         }
         int voltageOffset = negative? -jsonparse_get_value_as_int(&jsonParser) : jsonparse_get_value_as_int(&jsonParser);
-        if (voltageOffset >= -500 && voltageOffset <= 500)
+        if (voltageOffset != state.rtcMem.batteryOffset && voltageOffset >= -500 && voltageOffset <= 500)
         {
           // adjust battery level and save new offset
           state.batteryVoltage -= state.rtcMem.batteryOffset;
-          state.rtcMem.batteryOffset = voltageOffset; // millivolt
+          state.rtcMem.batteryOffset = voltageOffset; // [mV]
           state.batteryVoltage += state.rtcMem.batteryOffset;
+
+          // low battery check
+          state.rtcMem.lowBattery = state.batteryVoltage < MIN_BATTERY_VOLTAGE;
         }
       }
       else if (jsonparse_strcmp_value(&jsonParser, "programId") == 0)
@@ -276,7 +274,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
         jsonparse_next(&jsonParser);
         jsonparse_next(&jsonParser);
         int programId = jsonparse_get_value_as_int(&jsonParser);
-        if (programId >= 0 && programId != state.rtcMem.activityProgramId)
+        if (programId != state.rtcMem.activityProgramId && programId >= 0)
         {
           state.rtcMem.activityProgramId = programId;
           activityCount = 0; // when program id changes new activities must be supplied - otherwise old activities will be cleared
@@ -422,9 +420,31 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
   }
 }
 
-LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
+/**
+ * trigger immediate host communication processing in timer context
+ * note: directly calling comTimerCallback e.g. from socket context
+ *       prevents required idle processing
+ */
+void comProcessing(void)
 {
-  os_timer_disarm(&wlanTimer);
+  os_timer_disarm(&comTimer);
+  os_timer_arm(&comTimer, 1, NULL);
+}
+
+/**
+ * host communication processing
+ * - wait for AP connect
+ * - connect to host
+ * - send current state to host
+ * - wait for host command
+ * - send new state to host
+ * - enter deep sleep mode
+ */
+LOCAL void comTimerCallback(void *arg)
+{
+  os_timer_disarm(&comTimer);
+
+  //ets_uart_printf("comTimerCallback uptime %lu ms\r\n", system_get_time()/1000);
 
   // log WLAN station connect status
   uint8 wlanConnecting = false;
@@ -435,14 +455,14 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
       case STATION_GOT_IP:
         if (state.rtcMem.ipConfig.ip.addr)
         {
-          ets_uart_printf("WLAN IP ready at %lu ms\r\n", system_get_time()/1000);
+          ets_uart_printf("IP up after %lu ms, RSSI %d dB\r\n", system_get_time()/1000, wifi_station_get_rssi());
         }
         else
         {
           // save DHCP IP address (but clear gateway)
           if (wifi_get_ip_info(STATION_IF, &state.rtcMem.ipConfig))
           {
-            ets_uart_printf("WLAN got DHCP IP " IPSTR " at %lu ms\r\n", IP2STR(&state.rtcMem.ipConfig.ip), system_get_time()/1000);
+            ets_uart_printf("DHCP got IP " IPSTR " after %lu ms, RSSI %d dB\r\n", IP2STR(&state.rtcMem.ipConfig.ip), system_get_time()/1000, wifi_station_get_rssi());
             state.rtcMem.ipConfig.gw.addr = 0;
 
             // disable WLAN DHCP client
@@ -459,7 +479,7 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
           }
         }
 
-        // end of override
+        // convert end timestamp of manual override
         esp_gmtime(&state.rtcMem.overrideEndTime, &tms);
 
         // estimate current time
@@ -467,121 +487,150 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
         esp_gmtime(&now, &nowTMS);
 
         // create and send TCP request
-        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"totalOpen\":%lu, \"voltage\":%d}",
+        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d}",
                               VERSION,
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               1900 + tms.tm_year, 1 + tms.tm_mon, tms.tm_mday, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec,
                               getSleeperModeAsText(),
                               state.rtcMem.valveOpen? "ON" : "OFF",
                               state.rtcMem.activityProgramId,
+                              state.rtcMem.totalOpenCount,
                               state.rtcMem.totalOpenDuration,
                               state.batteryVoltage);
         uplink_sendRequest(REMOTE_IP, REMOTE_PORT, txMessage);
 
-        // update state
+        // update state and wait for TCP reply
         wlanConnected  = true;
+        comTimeout = MAX_UPLINK_TIME;
         break;
 
       case STATION_WRONG_PASSWORD:
         ets_uart_printf("ERROR: WLAN wrong password, aborting\r\n");
-        wlanTimeout = 0;
+        comTimeout = 0;
         break;
 
       case STATION_NO_AP_FOUND:
         ets_uart_printf("ERROR: WLAN AP not found, aborting\r\n");
-        wlanTimeout = 0;
+        comTimeout = 0;
         break;
 
       case STATION_CONNECT_FAIL:
         ets_uart_printf("ERROR: WLAN connect failed, aborting\r\n");
-        wlanTimeout = 0;
+        comTimeout = 0;
         break;
 
       default:
-        ets_uart_printf("WLAN connecting ...\r\n");
+        // waiting for AP connect
+        ets_uart_printf(".");
         wlanConnecting = true;
-        wlanTimeout -= WLAN_TIMER_PERIOD;
+        comTimeout -= WLAN_TIMER_PERIOD;
     }
   }
   else
   {
     // connected to AP, communicating via TCP/IP
-    wlanTimeout -= UPLINK_TIMER_PERIOD;
+    comTimeout -= UPLINK_TIMER_PERIOD;
   }
 
-  if (wlanConnecting && wlanTimeout > 0)
+  if (wlanConnecting && comTimeout > 0)
   {
     // passive wait for WLAN link to AP
-    os_timer_arm(&wlanTimer, WLAN_TIMER_PERIOD, 0); // milliseconds
+    os_timer_arm(&comTimer, WLAN_TIMER_PERIOD, NULL);
   }
   else if (!readyForShutdown)
   {
     // WLAN link to AP established or timeout
-    if (!uplink_hasReceived() && wlanTimeout > 0)
+    if (!uplink_hasReceived() && comTimeout > 0)
     {
       // passive wait for TCP reply
-      os_timer_arm(&wlanTimer, UPLINK_TIMER_PERIOD, 0); // milliseconds
+      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
     }
     else if (statusSent)
     {
       // wait for status to be sent and connection to be closed or timeout
-      if (uplink_isClosed() || wlanTimeout <= 0)
+      if (uplink_isClosed() || comTimeout <= 0)
       {
+        // status sent and socket closed or timeout, shutdown
         readyForShutdown = true;
       }
-      os_timer_arm(&wlanTimer, UPLINK_TIMER_PERIOD, 0);
+      else
+      {
+        // keep waiting for confirmation or timeout
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+      }
     }
     else
     {
-      // process TCP reply or timeout
+      // process TCP reply or reply receive timeout
       uint8 mode = state.rtcMem.mode;
       uint64 start = 0;
 
       char* reply = (char*)uplink_getReply();
       if (reply[0])
       {
-        parseReply(reply, &mode, &start),
-        ets_uart_printf("JSON parsing reply completed at %lu ms\r\n", system_get_time()/1000);
+        // reply received, parse (takes about 30 ms)
+        parseReply(reply, &mode, &start);
+        //ets_uart_printf("JSON parsing reply completed at %lu ms\r\n", system_get_time()/1000);
+      }
+      else if (wlanConnecting)
+      {
+        // WLAN link timeout
+        ets_uart_printf("ERROR: WLAN connect timeout\r\n");
       }
       else
       {
-        // WLAN link or TCP reply timeout
+        // TCP reply timeout
         ets_uart_printf("ERROR: TCP reply timeout\r\n");
       }
 
       // operate valve
       nextEventTime = valveControl(&state, false, mode, start);
 
-      // create and send TCP status message @todo make depended on state change
       if (reply[0])
       {
+        // reply received, create and send TCP status message
         uint64 now = getTime();
         esp_gmtime(&now, &nowTMS);
-        os_sprintf(txMessage, "{\"name\":\"SleeperStatus\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"totalOpen\":%lu, \"voltage\":%d}",
+        os_sprintf(txMessage, "{\"name\":\"SleeperStatus\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u,  \"totalOpen\":%lu, \"voltage\":%d}",
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               getSleeperModeAsText(),
                               state.rtcMem.valveOpen? "ON" : "OFF",
                               state.rtcMem.activityProgramId,
+                              state.rtcMem.totalOpenCount,
                               state.rtcMem.totalOpenDuration,
                               state.batteryVoltage);
         uplink_sendMessage(txMessage);
+
+        // passive wait for TCP transmit and disconnect confirmation
         statusSent = true;
-        wlanTimeout = 60; // limit time for status transmission and socket close to 60 milliseconds
+        comTimeout = UPLINK_TIMER_PERIOD; // limit max. time for status transmission and socket close to one timer period
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
       }
       else
       {
         // no reply, skip sending status and close uplink
+        if (!uplink_isClosed())
+        {
         uplink_close();
-        readyForShutdown = true;
-      }
 
-      // passive wait for TCP send and disconnect
-      os_timer_arm(&wlanTimer, UPLINK_TIMER_PERIOD, 0);
+          // passive wait for disconnect confirmation
+          statusSent = true;
+          comTimeout = UPLINK_TIMER_PERIOD; // limit max. time for socket close to one timer period
+          os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+        }
+        else
+        {
+          // uplink already closed, shutdown
+        readyForShutdown = true;
+        }
+      }
     }
   }
-  else
+
+  // ready for shutdown
+  if (readyForShutdown)
   {
-    ets_uart_printf("Sleeper preparing for shutdown at %lu ms\r\n", system_get_time()/1000);
+    //ets_uart_printf("Sleeper preparing for shutdown at %lu ms\r\n", system_get_time()/1000);
 
     // check uplink connection
     if (!uplink_isClosed())
@@ -589,11 +638,16 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
       ets_uart_printf("ERROR: TCP connection still open\r\n");
     }
 
-    // explicitly disconnect WLAN to prevent sporadically increased quiescent current
-    wifi_station_disconnect();
+    // explicitly shutdown WLAN to prevent sporadically increased quiescent current
+    // wifi_station_disconnect() will prolong next AP reconnect by about 1000 ms
+    // @todo needs idle state to be effective?
+    if (!wifi_set_sleep_type(MODEM_SLEEP_T))
+    {
+      ets_uart_printf("ERROR: enabling WLAN modem sleep failed\r\n");
+    }
 
     // shutdown valve GPIOs
-    valveShutdown();
+    valveDriverShutdown();
 
     // estimate current time
     state.rtcMem.lastShutdownTime = getTime();
@@ -636,7 +690,7 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
 
     // say goodbye
     esp_gmtime(&state.rtcMem.lastShutdownTime, &tms);
-    ets_uart_printf("Sleeper going to sleep for %lu seconds at %02u:%02u:%02u.%03uZ %02u.%02u.%u (uptime %lu ms)\r\n", state.rtcMem.lastDowntime/1000, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec, tms.tm_mday, 1 + tms.tm_mon, 1900 + tms.tm_year, system_get_time()/1000);
+    ets_uart_printf("going to sleep for %lu seconds at %02u:%02u:%02u.%03uZ %02u.%02u.%u (uptime %lu ms)\r\n", state.rtcMem.lastDowntime/1000, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec, tms.tm_mday, 1 + tms.tm_mon, 1900 + tms.tm_year, system_get_time()/1000);
 
     // go to deep sleep
     system_deep_sleep_set_option(needWLAN? 1 : 4);
@@ -644,13 +698,49 @@ LOCAL void ICACHE_FLASH_ATTR timerCallback(void *arg)
   }
 }
 
-void user_init(void)
+/**
+ * WLAN event handler
+ */
+LOCAL void wifiEventCallback(System_Event_t *evt)
 {
-  ets_uart_printf("Gardena 9V solenoid irrigation valve controller V" VERSION " ...\r\n");
-  ets_uart_printf("Copyright (c) 2015 jnsbyr, Germany\r\n\r\n");
+  switch (evt->event)
+  {
+    case EVENT_STAMODE_CONNECTED:
+      //ets_uart_printf("WLAN event: connected\r\n");
+      if (wifi_station_dhcpc_status() == DHCP_STOPPED)
+      {
+        // open uplink immediately after connecting to AP
+        comProcessing();
+      }
+      break;
+    case EVENT_STAMODE_GOT_IP:
+      //ets_uart_printf("WLAN event: got IP\r\n");
+      if (wifi_station_dhcpc_status() == DHCP_STARTED)
+      {
+        // open uplink after receiving IP address
+        comProcessing();
+      }
+      break;
+  }
+}
+
+/**
+ * dummy implementation (required)
+ */
+void ICACHE_FLASH_ATTR user_rf_pre_init(void)
+{
+}
+
+/**
+ * system setup
+ */
+void ICACHE_FLASH_ATTR user_init(void)
+{
+  ets_uart_printf("Gardena 9V solenoid irrigation valve controller ver: " VERSION "\r\n");
+  ets_uart_printf("Copyright (c) 2015-2016 jnsbyr, Germany\r\n\r\n");
 
   // configure valve GPIOs
-  valueInitGPIOs();
+  valveDriverInit();
 
   // read RTC memory
   uint8 reinitState = false;
@@ -659,7 +749,7 @@ void user_init(void)
     if (state.rtcMem.magic != SLEEPER_STATE_MAGIC)
     {
       ets_uart_printf("WARNING: RTC memory lost\r\n");
-      state.rtcMem.batteryOffset = -50; // config, millivolt, every chip seems to have different ADC offset up to 200 mV
+      state.rtcMem.batteryOffset = 0; // config, millivolt, every chip seems to have different ADC offset up to 200 mV
       reinitState = true;
     }
   }
@@ -669,8 +759,8 @@ void user_init(void)
     reinitState = true;
   }
 
-  // read vdd33 before entering station mode (SDK 1.0.0)
-  state.batteryVoltage = readvdd33() + state.rtcMem.batteryOffset; //system_get_vdd33()); // (uint16)(phy_get_vdd33());
+  // read vdd before entering station mode (system_get_vdd33() requires modifying the default esp init data byte 107 0->255 and RF to be up)
+  state.batteryVoltage = readvdd33() + state.rtcMem.batteryOffset; // system_get_vdd33(); // (uint16)(phy_get_vdd33());
 
   // init state
   state.timeSynchronized = false;
@@ -679,13 +769,13 @@ void user_init(void)
   if (reinitState)
   {
     // RTC memory is invalid, initialize config and state
-    state.rtcMem.magic          = SLEEPER_STATE_MAGIC;      // static
-    state.rtcMem.downtime       = DEFAULT_DOWNTIME;         // config
-    state.rtcMem.downtimeScale  = DEFAULT_DEEP_SLEEP_SCALE; // config
-    state.rtcMem.boottime       = DEFAULT_BOOTTIME;         // config
+    state.rtcMem.magic           = SLEEPER_STATE_MAGIC;      // static
+    state.rtcMem.boottime        = SLEEPER_BOOTTIME;         // config
+    state.rtcMem.downtime        = DEFAULT_DOWNTIME;         // config
+    state.rtcMem.downtimeScale   = DEFAULT_DEEP_SLEEP_SCALE; // config
     state.rtcMem.defaultDuration = DEFAULT_MANUAL_DURATION;  // config
-    state.rtcMem.mode           = MODE_OFF;                 // config
-    state.rtcMem.activityProgramId = 0;                     // config
+    state.rtcMem.mode            = MODE_OFF;                 // config
+    state.rtcMem.activityProgramId = 0;                      // config
     tms.tm_mday = 1;
     tms.tm_mon  = 0;
     tms.tm_year = 70;
@@ -705,6 +795,7 @@ void user_init(void)
     state.rtcMem.valveCloseTimeEstimated = 0;
     state.rtcMem.overrideEndTime = 0;
     state.rtcMem.overrideEndTimeEstimated = false;
+    state.rtcMem.totalOpenCount = 0;
     state.rtcMem.totalOpenDuration = 0;
     for (uint16 i = 0; i < MAX_ACTIVITIES; i++)
     {
@@ -726,7 +817,7 @@ void user_init(void)
     ets_uart_printf("Sleeper status: uptime %lu, valve %u\r\n", system_get_time()/1000, state.rtcMem.valveOpen);
   }
 
-  // wakeup cause by user?
+  // wakeup caused by user?
   if (isUserWakeup())
   {
     ets_uart_printf("wakeup by user\r\n");
@@ -734,19 +825,15 @@ void user_init(void)
     // try to toggle valve
     valveControl(&state, true, MODE_OFF, getTime());
 
-    // precompensate timekeeping for early wakeup by one runtime in case of no WLAN or setTime = false
+    // precompensate timekeeping for early wakeup by one runtime in case of setTime = false or no WLAN
     state.rtcMem.lastDowntime -= SLEEPER_COMMANDTIME;
-  }
 
-/*
-  enum sleep_type sleepType = wifi_get_sleep_type();
-  switch (sleepType)
-  {
-    case MODEM_SLEEP_T: ets_uart_printf("WLAN modem sleeping\r\n");         break;
-    case LIGHT_SLEEP_T: ets_uart_printf("WLAN modem sleeping lightly\r\n"); break;
-    case NONE_SLEEP_T:  ets_uart_printf("WLAN modem active\r\n");           break;
+    // backup new valve state immediately to RTC memory to provide full manual control even if WLAN connect fails
+    if (!system_rtc_mem_write(64, &state.rtcMem, sizeof(state.rtcMem)))
+    {
+      ets_uart_printf("ERROR: writing to RTC memory failed\r\n");
+    }
   }
-*/
 
   // configure WLAN operation mode
   uint8 setWLANOpMode = STATION_MODE;
@@ -759,7 +846,7 @@ void user_init(void)
     }
   }
 
-  // reuse last DHCP IP address
+  // reuse last DHCP IP address to speed up ready state (saves about 3000 ms)
   if (state.rtcMem.ipConfig.ip.addr)
   {
     // disable WLAN DHCP client
@@ -787,8 +874,9 @@ void user_init(void)
     os_sprintf(setStationConfig.password, "%s", WLAN_PSK);
     if (os_memcmp(actStationConfig.password, setStationConfig.password, sizeof(setStationConfig.password)))
     {
-      ets_uart_printf("changing WLAN station configuration\r\n");
-      if (!wifi_station_set_config(&setStationConfig))
+      ets_uart_printf("updating WLAN station configuration\r\n");
+      reinitState = true;
+      if (!wifi_station_set_config(&setStationConfig)) // persistent
       {
         ets_uart_printf("ERROR: changing WLAN station configuration failed\r\n");
       }
@@ -799,61 +887,40 @@ void user_init(void)
     ets_uart_printf("ERROR: getting WLAN station configuration failed\r\n");
   }
 
-  if (reinitState)
-  {
-    wifi_station_disconnect();
-  }
-
   // enable WLAN station auto connect
   if (!wifi_station_get_auto_connect())
   {
     ets_uart_printf("enabling WLAN station auto connect at power on\r\n");
     if (!wifi_station_set_auto_connect(true)) // persistent, default true
     {
-      ets_uart_printf("ERROR: enabling WLAN station auto connect failed\r\n");
+      ets_uart_printf("ERROR: enabling WLAN station auto connect at power failed\r\n");
     }
   }
 
-  wifi_station_connect();
+  // limit WLAN speed to save power
+  if (wifi_get_phy_mode() != PHY_MODE_11G)
+  {
+    ets_uart_printf("forcing IEEE 802.11G mode\r\n");
+    if (!wifi_set_phy_mode(PHY_MODE_11G)) // persistent
+    {
+      ets_uart_printf("ERROR: forcing IEEE 802.11G mode failed\r\n");
+    }
+  }
 
   // init state
   wlanConnected    = false;
-  wlanTimeout      = MAX_WLAN_TIME; // milliseconds
+  comTimeout       = MAX_WLAN_TIME/2; // milliseconds
   statusSent       = false;
   readyForShutdown = false;
   nextEventTime    = 0;
 
+  // register WLAN event handler
+  wifi_set_event_handler_cb(wifiEventCallback);
+
   // passive wait for WLAN connection
-  os_timer_disarm(&wlanTimer);
-  os_timer_setfn(&wlanTimer, (os_timer_func_t*) timerCallback, NULL);
-  os_timer_arm(&wlanTimer, 1100, 0); // milliseconds
+  os_timer_disarm(&comTimer);
+  os_timer_setfn(&comTimer, (os_timer_func_t*) comTimerCallback, NULL);
+  os_timer_arm(&comTimer, MAX_WLAN_TIME/2, NULL); // milliseconds timeout
 
-//  ets_uart_printf("Sleeper init completed in %lu ms!\r\n", system_get_time()/1000);
+  //ets_uart_printf("Sleeper init completed in %lu ms!\r\n", system_get_time()/1000);
 }
-
-// set up a periodic timer
-//LOCAL os_timer_t osTimer;
-//os_timer_disarm(&osTimer);
-//os_timer_setfn(&osTimer, (os_timer_func_t*)info_cb, (void*)0);
-//os_timer_arm(&osTimer, DELAY, 1);
-// @TODO	ets_wdt_disable();
-// @TODO	ets_wdt_init(100000);
-// @TODO	ets_wdt_enable();
-// @TODO	wdt_feed();
-
-/*
-    // log battery voltage
-    os_sprintf(printBuffer, "battery has %u mV\r\n", batteryVoltage);
-    ets_uart_printf(printBuffer);
-*/
-/* RTC lags system time about 10 ms after deep sleep
-    // log RTC time (may overflow)
-    uint32 rtcTicks = system_get_rtc_time();
-    uint32 rtcCalibration = system_rtc_clock_cali_proc();
-    uint32 intPart = rtcCalibration >> 12;
-    uint32 decPart = rtcCalibration & 0xFFF;
-    uint32 rtcTime = rtcTicks*intPart + ((rtcTicks*decPart)>>12);
-    os_sprintf(printBuffer, "RTC time %lu ms\r\n", rtcTime/1000);
-    ets_uart_printf(printBuffer);
- */
-

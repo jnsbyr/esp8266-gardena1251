@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,18 +16,9 @@
  *
  *****************************************************************************
  *
- * The author of this file does not claim any copyright or authorship of the
- * algorithms and mathematics used in this file. They are either trivial or
- * based on well documented public knowledge. The credits go to:
- *
- *     Gregorian calendar (1582 AD)
- *     Zeller's congruence algorithm (1882 AD)
- *
- *****************************************************************************
- *
  * project: ESP8266 library enhancements
  *
- * file:    time.c
+ * file:    esp_time.c
  *
  * created: 13.04.2015
  *
@@ -40,39 +31,26 @@
  *
  *****************************************************************************/
 
-#include "time.h"
+#include "esp_time.h"
 
 #include <osapi.h>
+#include <c_types.h>
 
-// leap year rule (Gregorian calendar)
-#define isLeapYear(year) (year%400 == 0 || (year%4 == 0 && year%100 != 0))
-
-/**
- * @return array of days per month (Gregorian calendar)
- */
-LOCAL const uint32* getDaysPerMonth(uint32 year)
+struct tm
 {
-  LOCAL const uint32 daysPerMonthInCommonYear[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  LOCAL const uint32 daysPerMonthInLeapYear[]   = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  uint32 tm_sec;   /* seconds: 0-59 */
+  uint32 tm_min;   /* minutes: 0-59 */
+  uint32 tm_hour;  /* hours since midnight: 0-23 */
+  uint32 tm_mday;  /* day of the month: 1-31 */
+  uint32 tm_mon;   /* months since January: 0-11 */
+  uint32 tm_year;  /* years since 1900 */
+  uint32 tm_wday;  /* days since Sunday (0-6) */
+  uint32 tm_yday;  /* days since January 1: 0-365 */
+  uint32 tm_isdst; /* +1 DST, 0 no DST, -1 unknown */
+};
 
-  return isLeapYear(year)? daysPerMonthInLeapYear : daysPerMonthInCommonYear;
-}
-
-/**
- * compute the number of the day in the week using Zeller's congruence algorithm
- *
- * @return number of day (0 = Sunday)
- */
-LOCAL uint32 ICACHE_FLASH_ATTR getWeekday(uint32 year, uint32 month, uint32 day)
-{
-  uint32 zellerAdjustment = (14 - month)/12;
-  uint32 m = month + 12*zellerAdjustment - 2; // March = 1, January = 11
-  uint32 y = year - zellerAdjustment;         // use previous year for January and February
-  uint32 d = y%100; // last two digits of year
-  uint32 c = y/100; // century
-  uint32 h = day + (13*m - 1)/5 + d + d/4 + c/4 - 2*c;
-  return h%7;
-}
+// enable undocumented SDK function (works as gmtime if timezone is not set with sntp_set_timezone)
+extern struct tm* sntp_localtime(const uint32*);
 
 /*
  * mktime implementation with milliseconds support
@@ -87,53 +65,18 @@ uint64 ICACHE_FLASH_ATTR esp_mktime(struct ets_tm* tms)
  */
 void ICACHE_FLASH_ATTR esp_gmtime(uint64* t, struct ets_tm* tms)
 {
-  LOCAL const uint32 secondsPerDay = 86400;
-
-  // year
   uint32 secs = *t/1000ULL;  // [ms] -> [s]
-  uint32 year = 70;
-  while (true)
-  {
-    uint32 spy = secondsPerDay*(isLeapYear(year)? 366 : 365);
-    if (secs <= spy)
-    {
-      break;
-    }
-    secs -= spy;
-    year++;
-  }
-  tms->tm_year = year;
-
-  // month
-  uint32 mon = 0;
-  uint32 yday = 0;
-  const uint32* dpm = getDaysPerMonth(year);
-  while (true)
-  {
-    uint32 spm = secondsPerDay*dpm[mon];
-    if (secs <= spm)
-    {
-      break;
-    }
-    secs -= spm;
-    yday += dpm[mon];
-    mon++;
-  }
-  tms->tm_mon = mon;
-
-  // day
-  tms->tm_mday = 1 + (secs/secondsPerDay);
-  tms->tm_yday = yday + tms->tm_mday;
-  tms->tm_wday = getWeekday(1900 + tms->tm_year, tms->tm_mon + 1, tms->tm_mday);
-
-  // time
-  secs %= secondsPerDay;
-  tms->tm_hour = secs/3600;
-  secs %= 3600;
-  tms->tm_min  = secs/60;
-  tms->tm_sec  = secs%60;
-  tms->tm_msec = *t%1000ULL;
-  tms->tm_isdst = 0;
+  struct tm* tmp = sntp_localtime(&secs);
+  tms->tm_msec  = *t%1000ULL;
+  tms->tm_sec   = tmp->tm_sec;
+  tms->tm_min   = tmp->tm_min;
+  tms->tm_hour  = tmp->tm_hour;
+  tms->tm_mday  = tmp->tm_mday;
+  tms->tm_mon   = tmp->tm_mon;
+  tms->tm_year  = tmp->tm_year;
+  tms->tm_wday  = tmp->tm_wday;
+  tms->tm_yday  = tmp->tm_yday;
+  tms->tm_isdst = tmp->tm_isdst;
 }
 
 /**

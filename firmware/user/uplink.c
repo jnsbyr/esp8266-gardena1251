@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,8 @@
 #include <espconn.h>
 #include <osapi.h>
 
+#include "main.h"
+
 typedef enum {
   TCP_UNDEFINED,
   TCP_DISCONNECTED,
@@ -44,7 +46,7 @@ typedef enum {
 
 LOCAL struct espconn connection;
 LOCAL esp_tcp tcp;
-LOCAL tConnState connState = TCP_UNDEFINED;
+LOCAL tConnState connState = TCP_DISCONNECTED;
 LOCAL char* txPayload;
 LOCAL char rxPayload[1024];
 LOCAL uint16 rxPayloadSize;
@@ -72,7 +74,10 @@ LOCAL void ICACHE_FLASH_ATTR clientReceiveCallback(void *arg, char *pdata, unsig
   rxPayloadSize = len;
   connState = TCP_RECEIVED;
 
-//  ets_uart_printf("TCP message received: %s\r\n", rxPayload);
+  //  ets_uart_printf("TCP message received: %s\r\n", rxPayload);
+
+  // trigger receive processing
+  comProcessing();
 }
 
 LOCAL void ICACHE_FLASH_ATTR clientConnectedCallback(void *arg)
@@ -105,6 +110,9 @@ LOCAL void ICACHE_FLASH_ATTR clientDisconnectedCallback(void *arg)
   {
     ets_uart_printf("ERROR: TCP connection is NULL!\r\n");
   }
+
+  // trigger disconnect processing
+  comProcessing();
 }
 
 LOCAL void ICACHE_FLASH_ATTR clientErrorCallback(void *arg, sint8 err)
@@ -148,7 +156,7 @@ void ICACHE_FLASH_ATTR uplink_sendRequest(char* remoteIP, uint16 remotePort, cha
   espconn_regist_disconcb(&connection, clientDisconnectedCallback);
   espconn_regist_reconcb(&connection, clientErrorCallback);
 
-  // connect (blocking)
+  // connect (non blocking)
   ets_uart_printf("TCP connecting to " IPSTR ":%d\r\n", IP2STR(connection.proto.tcp->remote_ip), connection.proto.tcp->remote_port);
   sint8 espcon_status = espconn_connect(&connection);
   switch (espcon_status)

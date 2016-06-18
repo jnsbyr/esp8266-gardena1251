@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,11 +27,10 @@
 #ifndef __USER_VALVE_H__
 #define __USER_VALVE_H__
 
-#include <c_types.h>
 #include "main.h"
 
-void   ICACHE_FLASH_ATTR valueInitGPIOs();
+void   ICACHE_FLASH_ATTR valveDriverInit(void);
 uint64 ICACHE_FLASH_ATTR valveControl(SleeperStateT* sleeperState, uint8 override, uint8 mode, uint64 startTime);
-void   ICACHE_FLASH_ATTR valveShutdown();
+void   ICACHE_FLASH_ATTR valveDriverShutdown(void);
 
 #endif /* __USER_VALVE_H__ */

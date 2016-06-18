@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015 jnsbyr
+ * Copyright (c) 2015-2016 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,54 +30,59 @@
 #include <gpio.h>
 #include <osapi.h>
 
-#include "time.h"
+#include "esp_time.h"
 
 // time tolerance for scheduling next activity
 #define SCHEDULE_TIME_TOLERANCE (SLEEPER_MIN_DOWNTIME + SLEEPER_COMMANDTIME)  // milliseconds
 
-// use manual duration if activity duration is 0
+// use manual open duration if activity duration is 0
 #define effectiveDuration(d) (d > 0? d : sleeperState->rtcMem.defaultDuration)
-
-// close valve output
-#define CLOSE_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO4_U // ESP boot default: high ohm input
-#define CLOSE_VALVE_GPIO_FUNC FUNC_GPIO4
-#define CLOSE_VALVE_GPIO 4
-
-// open valve output works inverted!
-#define OPEN_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO5_U // ESP boot default: high ohm input
-#define OPEN_VALVE_GPIO_FUNC FUNC_GPIO5
-#define OPEN_VALVE_GPIO 5
-
-// recharging capacitor output works inverted!
-#define CAPACITOR_GPIO_MUX PERIPHS_IO_MUX_MTCK_U // ESP boot default: 40 k pullup
-#define CAPACITOR_GPIO_FUNC FUNC_GPIO13
-#define CAPACITOR_GPIO 13
-
-// enable generator output
-#define GENERATOR_GPIO_MUX PERIPHS_IO_MUX_MTDO_U // ESP-ADC board default: 15 k pulldown
-#define GENERATOR_GPIO_FUNC FUNC_GPIO15
-#define GENERATOR_GPIO 15
-
-#define MINUTES_PER_DAY 1440
 
 typedef struct
 {
   uint64 start;
   uint64 end;
-  uint32 duration;      // milliseconds
+  uint32 duration; // milliseconds
 } OperationT;
 
 LOCAL uint64 now;
 LOCAL struct ets_tm tms;
 LOCAL OperationT valveTiming;
 
-void ICACHE_FLASH_ATTR valveShutdown()
-{
-  // stop discharging capacitor (and possibly closing valve)
-  GPIO_OUTPUT_SET(CLOSE_VALVE_GPIO, 0);
-}
 
-void ICACHE_FLASH_ATTR valueInitGPIOs()
+#if VALVE_DRIVER_TYPE == 1
+
+// open Gardena latching valve using a 9 V step up converter and a capacitor
+//
+// GPIO  4 close valve         (push/pull, active high, floating in deep sleep)
+// GPIO  5 open valve          (open collector, active low, floating in deep sleep)
+// GPIO 13 charge capacitor    (open collector, active low)
+// GPIO 15 power supply enable (push/pull, active high, pulldown)
+
+// close valve output
+#define CLOSE_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO4_U
+#define CLOSE_VALVE_GPIO_FUNC FUNC_GPIO4
+#define CLOSE_VALVE_GPIO 4
+
+// open valve output works inverted!
+#define OPEN_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO5_U
+#define OPEN_VALVE_GPIO_FUNC FUNC_GPIO5
+#define OPEN_VALVE_GPIO 5
+
+// recharging capacitor output works inverted!
+#define CAPACITOR_GPIO_MUX PERIPHS_IO_MUX_MTCK_U
+#define CAPACITOR_GPIO_FUNC FUNC_GPIO13
+#define CAPACITOR_GPIO 13
+
+// enable generator output
+#define GENERATOR_GPIO_MUX PERIPHS_IO_MUX_MTDO_U
+#define GENERATOR_GPIO_FUNC FUNC_GPIO15
+#define GENERATOR_GPIO 15
+
+/**
+ * called first at OS init
+ */
+void ICACHE_FLASH_ATTR valveDriverInit()
 {
   // configure GPIO outputs
   PIN_FUNC_SELECT(GENERATOR_GPIO_MUX,   GENERATOR_GPIO_FUNC);
@@ -93,7 +98,7 @@ void ICACHE_FLASH_ATTR valueInitGPIOs()
 }
 
 /**
- * open Gardena latching valve using a 9 V step up converter and a capacitor
+ * open valve
  */
 LOCAL void ICACHE_FLASH_ATTR valveOpen(SleeperStateT* sleeperState)
 {
@@ -110,19 +115,24 @@ LOCAL void ICACHE_FLASH_ATTR valveOpen(SleeperStateT* sleeperState)
 
   // open latching valve by charing capacitor
   GPIO_OUTPUT_SET(OPEN_VALVE_GPIO, 0);
-  os_delay_us(250000); // 250 ms -> us
+  os_delay_us(VALVE_OPEN_PULSE_DURATION); // (250 ms) -> us
 
   // disable power to valve and disable generator
   GPIO_DIS_OUTPUT(OPEN_VALVE_GPIO);
   GPIO_OUTPUT_SET(GENERATOR_GPIO, 0);
 
-  sleeperState->rtcMem.valveOpen = true;
+  // update state
+  if (!sleeperState->rtcMem.valveOpen)
+  {
+    sleeperState->rtcMem.valveOpen = true;
+    sleeperState->rtcMem.totalOpenCount++;
+  }
   sleeperState->rtcMem.valveOpenTime = now;
   ets_uart_printf("valveOpen\r\n");
 }
 
 /**
- * close Gardena latching valve using a 9 V step up converter and a capacitor
+ * close valve
  */
 LOCAL void ICACHE_FLASH_ATTR valveClose(SleeperStateT* sleeperState)
 {
@@ -145,6 +155,7 @@ LOCAL void ICACHE_FLASH_ATTR valveClose(SleeperStateT* sleeperState)
 
   // continue discharging capacitor until os shutdown
 
+  // update state
   sleeperState->rtcMem.valveOpen = false;
   if (now > sleeperState->rtcMem.valveOpenTime)
   {
@@ -152,6 +163,131 @@ LOCAL void ICACHE_FLASH_ATTR valveClose(SleeperStateT* sleeperState)
   }
   ets_uart_printf("valveClose\r\n");
 }
+
+/**
+ * called last before OS shutdown
+ */
+void ICACHE_FLASH_ATTR valveDriverShutdown()
+{
+  // stop discharging capacitor (and possibly closing valve)
+  GPIO_OUTPUT_SET(CLOSE_VALVE_GPIO, 0);
+}
+
+#elif VALVE_DRIVER_TYPE == 2
+
+// GPIO  4 valve direction select (push/pull, active high, floating in deep sleep)
+// GPIO  5 operate valve          (push/pull, active high, floating in deep sleep)
+// GPIO 15 power supply enable    (push/pull, active high, pulldown)
+
+// close valve output
+#define OPEN_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO4_U
+#define OPEN_VALVE_GPIO_FUNC FUNC_GPIO4
+#define OPEN_VALVE_GPIO 4
+
+// open valve output works inverted!
+#define OPERATE_VALVE_GPIO_MUX PERIPHS_IO_MUX_GPIO5_U
+#define OPERATE_VALVE_GPIO_FUNC FUNC_GPIO5
+#define OPERATE_VALVE_GPIO 5
+
+// enable generator output
+#define GENERATOR_GPIO_MUX PERIPHS_IO_MUX_MTDO_U
+#define GENERATOR_GPIO_FUNC FUNC_GPIO15
+#define GENERATOR_GPIO 15
+
+/**
+ * called first at OS init
+ */
+void ICACHE_FLASH_ATTR valveDriverInit()
+{
+  // configure GPIO outputs and passive output state
+  PIN_FUNC_SELECT(GENERATOR_GPIO_MUX,     GENERATOR_GPIO_FUNC);
+  GPIO_OUTPUT_SET(GENERATOR_GPIO, 0);
+
+  PIN_FUNC_SELECT(OPERATE_VALVE_GPIO_MUX, OPERATE_VALVE_GPIO_FUNC);
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 0);
+
+  PIN_FUNC_SELECT(OPEN_VALVE_GPIO_MUX,    OPEN_VALVE_GPIO_FUNC);
+  GPIO_OUTPUT_SET(OPEN_VALVE_GPIO, 0);
+}
+
+/**
+ * open valve
+ */
+LOCAL void ICACHE_FLASH_ATTR valveOpen(SleeperStateT* sleeperState)
+{
+  // start generator, preset valve direction to open and wait for generator voltage to stablelize
+  GPIO_OUTPUT_SET(GENERATOR_GPIO,  1);
+  GPIO_OUTPUT_SET(OPEN_VALVE_GPIO, 0);  // 0 -> VOUT1 = H
+  os_delay_us(5000); // 5 ms -> us
+
+  // open valve by enabling H-bridge
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 1);
+  os_delay_us(VALVE_OPEN_PULSE_DURATION); // (250 ms) -> us
+
+  // short circuit valve current
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 0);
+  os_delay_us(1000); // 1 ms -> us
+
+  // done, go to passive state
+  valveDriverShutdown();
+
+  // update state
+  if (!sleeperState->rtcMem.valveOpen)
+  {
+    sleeperState->rtcMem.valveOpen = true;
+    sleeperState->rtcMem.totalOpenCount++;
+  }
+  sleeperState->rtcMem.valveOpenTime = now;
+  ets_uart_printf("valveOpen\r\n");
+}
+
+/**
+ * close valve
+ */
+LOCAL void ICACHE_FLASH_ATTR valveClose(SleeperStateT* sleeperState)
+{
+  // start generator, preset valve direction to close and wait for generator voltage to stablelize
+  GPIO_OUTPUT_SET(GENERATOR_GPIO,  1);
+  GPIO_OUTPUT_SET(OPEN_VALVE_GPIO, 1); // 1 -> VOUT2 = H
+  os_delay_us(5000); // 5 ms -> us
+
+  // close valve by enabling H-bridge
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 1);
+  os_delay_us(62500); // 62.5 ms -> us
+
+  // short circuit valve current
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 0);
+  os_delay_us(1000); // 1 ms -> us
+
+  // done, go to passive state
+  valveDriverShutdown();
+
+  // update state
+  sleeperState->rtcMem.valveOpen = false;
+  if (now > sleeperState->rtcMem.valveOpenTime)
+  {
+    sleeperState->rtcMem.totalOpenDuration += (now - sleeperState->rtcMem.valveOpenTime)/1000;
+  }
+  ets_uart_printf("valveClose\r\n");
+}
+
+/**
+ * called last before OS shutdown
+ */
+void ICACHE_FLASH_ATTR valveDriverShutdown()
+{
+  // passive GPIO output state
+  GPIO_OUTPUT_SET(OPERATE_VALVE_GPIO, 0);
+  GPIO_OUTPUT_SET(GENERATOR_GPIO,     0);
+  GPIO_OUTPUT_SET(OPEN_VALVE_GPIO,    0);
+}
+
+#else
+
+#error "selected VALVE_DRIVER_TYPE is not supported, choose 1 (capacitor) or 2 (H-bridge)"
+
+#endif // VALVE_DRIVER_TYPE
+
 
 /**
  * find index of 1st scheduled activity that matches current time (tms)
