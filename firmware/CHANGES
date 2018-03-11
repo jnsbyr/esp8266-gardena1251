@@ -136,3 +136,8 @@ CHANGES
   event driven TCP receive and disconnect processing (powersaving)
   report total open count (feature)
   H-bridge valve driver support added (feature)
+
+0.9.1.1 - 18.06.2016  
+  timeScale range increased to 10% (feature)
+  always sync time if time scale or time offset are changed (feature)
+  send RSSI in SleeperRequest message (feature)

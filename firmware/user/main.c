@@ -66,7 +66,7 @@
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.1.0"
+#define VERSION "0.9.1.1"
 
 #define SLEEPER_STATE_MAGIC 0xB4B0
 
@@ -133,7 +133,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
   uint64* startTime = (uint64*)start;
   uint64 serverTime = 0;
   uint16 activityCount = MAX_ACTIVITIES; // disable clearing current activities
-  uint8 setTime = false;
+  uint8 setTime = state.rtcMem.lastShutdownTime < 946684800000; // invalid if before 01.01.2000;
 
   int type;
   struct jsonparse_state jsonParser;
@@ -162,6 +162,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
         int timeOffset = jsonparse_get_value_as_int(&jsonParser); // milliseconds
         if (timeOffset >= -500 && timeOffset <= 500)
         {
+          setTime = setTime || timeOffset != state.rtcMem.boottime;
           state.rtcMem.boottime = timeOffset; // milliseconds
         }
       }
@@ -173,7 +174,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
         if (set >= 0 && set <= 1)
         {
           // sync time if requested or if time is invalid (after cold boot)
-          setTime = set || state.rtcMem.lastShutdownTime < 946684800000; // 01.01.2000
+          setTime = setTime || set;
           //ets_uart_printf("JSON setTime %d shutdown time %lld => %d\r\n", set, state.rtcMem.lastShutdownTime, setTime);
         }
       }
@@ -241,9 +242,11 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
           type = jsonparse_next(&jsonParser);
         }
         int timeScale = negative? -jsonparse_get_value_as_int(&jsonParser) : jsonparse_get_value_as_int(&jsonParser);
-        if (timeScale >= -500 && timeScale <= 500)
+        if (timeScale >= -1000 && timeScale <= 1000)
         {
-          state.rtcMem.downtimeScale = 10000 + timeScale; // 10000 = 1.0
+          timeScale += 10000; // 10000 = 1.0
+          setTime = setTime || timeScale != state.rtcMem.downtimeScale;
+          state.rtcMem.downtimeScale = timeScale; //
         }
       }
       else if (jsonparse_strcmp_value(&jsonParser, "voltageOffset") == 0)
@@ -455,7 +458,8 @@ LOCAL void comTimerCallback(void *arg)
       case STATION_GOT_IP:
         if (state.rtcMem.ipConfig.ip.addr)
         {
-          ets_uart_printf("IP up after %lu ms, RSSI %d dB\r\n", system_get_time()/1000, wifi_station_get_rssi());
+          state.rssi = wifi_station_get_rssi();
+          ets_uart_printf("IP up after %lu ms, RSSI %d dB\r\n", system_get_time()/1000, state.rssi);
         }
         else
         {
@@ -487,7 +491,7 @@ LOCAL void comTimerCallback(void *arg)
         esp_gmtime(&now, &nowTMS);
 
         // create and send TCP request
-        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d}",
+        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d, \"RSSI\":%d}",
                               VERSION,
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               1900 + tms.tm_year, 1 + tms.tm_mon, tms.tm_mday, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec,
@@ -496,7 +500,8 @@ LOCAL void comTimerCallback(void *arg)
                               state.rtcMem.activityProgramId,
                               state.rtcMem.totalOpenCount,
                               state.rtcMem.totalOpenDuration,
-                              state.batteryVoltage);
+                              state.batteryVoltage,
+                              state.rssi);
         uplink_sendRequest(REMOTE_IP, REMOTE_PORT, txMessage);
 
         // update state and wait for TCP reply

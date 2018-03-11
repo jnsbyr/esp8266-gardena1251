@@ -51,7 +51,7 @@ Special credits to Mikhail Grigorev "CHERTS" for the seamless integration of the
 
 #### Configuration ####
 
-Currently the WLAN access point configuration and the IP address and port of the management service must be set in the file _user___config.h_ before building the firmware. In a future release this configuration will be done by WLAN without the need of changing the firmware.
+Currently the WLAN access point configuration and the IP address and port of the management service must be set in the file _user__config.h_ before building the firmware. In a future release this configuration will be done by WLAN without the need of changing the firmware. Also check if _FLASHPARMS_ in the Makefile matches the flash type of your ESP8266.
 
 
 ## Management Service ##

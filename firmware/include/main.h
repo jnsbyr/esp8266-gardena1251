@@ -100,6 +100,7 @@ typedef struct
 {
   PersistentStateT rtcMem; // persistent values
   sint16 batteryVoltage;   // supply voltage at time of boot
+  sint8  rssi;             // RSSI at time of connect
   uint8  timeSynchronized; // bool, current time is synchronized with server
 } SleeperStateT;
 
