@@ -1,3 +1,4 @@
 /firmware/
 /build/
 /.settings/
+/include/user_config-*.h

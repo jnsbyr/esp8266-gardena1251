@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015-2016 jnsbyr
+ * Copyright (c) 2015-2018 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,7 +66,7 @@
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.1.1"
+#define VERSION "0.9.1.2"
 
 #define SLEEPER_STATE_MAGIC 0xB4B0
 
@@ -491,8 +491,8 @@ LOCAL void comTimerCallback(void *arg)
         esp_gmtime(&now, &nowTMS);
 
         // create and send TCP request
-        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d, \"RSSI\":%d}",
-                              VERSION,
+        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s%c\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d, \"RSSI\":%d}",
+                              VERSION, VALVE_DRIVER_TYPE==2? 'H' : 'C',
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               1900 + tms.tm_year, 1 + tms.tm_mon, tms.tm_mday, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec,
                               getSleeperModeAsText(),
@@ -742,7 +742,7 @@ void ICACHE_FLASH_ATTR user_rf_pre_init(void)
 void ICACHE_FLASH_ATTR user_init(void)
 {
   ets_uart_printf("Gardena 9V solenoid irrigation valve controller ver: " VERSION "\r\n");
-  ets_uart_printf("Copyright (c) 2015-2016 jnsbyr, Germany\r\n\r\n");
+  ets_uart_printf("Copyright (c) 2015-2018 jnsbyr, Germany\r\n\r\n");
 
   // configure valve GPIOs
   valveDriverInit();
@@ -764,7 +764,11 @@ void ICACHE_FLASH_ATTR user_init(void)
     reinitState = true;
   }
 
-  // read vdd before entering station mode (system_get_vdd33() requires modifying the default esp init data byte 107 0->255 and RF to be up)
+  //ets_uart_printf("readvdd33 %u\r\n", readvdd33());
+  //ets_uart_printf("system_get_vdd33 %u\r\n", system_get_vdd33());
+  //ets_uart_printf("phy_get_vdd33 %u\r\n", phy_get_vdd33());
+
+  // read vdd before operating valve and entering station mode (system_get_vdd33() requires modifying the default esp init data byte 107 0->255 and RF to be up)
   state.batteryVoltage = readvdd33() + state.rtcMem.batteryOffset; // system_get_vdd33(); // (uint16)(phy_get_vdd33());
 
   // init state
@@ -867,6 +871,12 @@ void ICACHE_FLASH_ATTR user_init(void)
     {
       ets_uart_printf("ERROR: changing WLAN station IP address failed\r\n");
     }
+
+    comTimeout = MAX_WLAN_TIME/2; // milliseconds ~4 s
+  }
+  else
+  {
+    comTimeout = MAX_WLAN_TIME; // milliseconds ~8 s
   }
 
   // configure WLAN station
@@ -914,7 +924,6 @@ void ICACHE_FLASH_ATTR user_init(void)
 
   // init state
   wlanConnected    = false;
-  comTimeout       = MAX_WLAN_TIME/2; // milliseconds
   statusSent       = false;
   readyForShutdown = false;
   nextEventTime    = 0;

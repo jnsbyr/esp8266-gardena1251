@@ -12,7 +12,7 @@
 #
 
 # project name
-TARGET		= sleeper-0.9.1.1
+TARGET		= sleeper-0.9.1.2
 
 # source subdirectories
 MODULES		= user driver
@@ -25,7 +25,7 @@ LIBS			= c gcc hal phy pp net80211 lwip wpa crypto main json
 FLASHPARMS	= --flash_freq 40m --flash_mode dio --flash_size 8m
 
 # flash tool parameters (dependent on PC UART hardware)
-ESPPORT		= COM4
+ESPPORT		= COM5
 ESPBAUD		= 74880
 
 # Xtensa LX compiler path

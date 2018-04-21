@@ -88,6 +88,8 @@ The initial decision for the prototype fell on the 3rd variant using 3 MOSFETs a
 
 The power requirements for the ESP8266 SoC could be reduced significantly by reducing the minimum runtime from about 1700 ms to about 500 ms. This was possible by moving to the more recent Espressif ESP SDK versions. It is the combined effect of the removal of a workaround required for the earlier Espressif ESP SDK versions to avoid spurious high power draw in deep sleep (by disassociating from the AP before shutdown and reassociating after startup), event based AP connect detection and event based TCP connect/send/receive/disconnect detection.
 
+After 3 year of operation the inner contact of the female RCA connector was completely corroded and had to be replaced. This was due to the low price of the component and the humid operation environment. Next to the waterproof case the connector must be of high quality to avoid this kind of maintenance.
+
 
 ## Licenses ##
 
@@ -98,7 +100,7 @@ Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public L
 
 #### Firmware ####
 
-Copyright (c) 2015-2016 jnsbyr
+Copyright (c) 2015-2018 jnsbyr
 Apache 2.0 License
 
 The firmware source code depends on:
