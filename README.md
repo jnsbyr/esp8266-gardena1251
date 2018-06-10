@@ -47,7 +47,7 @@ The firmware was build using
 - using the [Espressif ESP8266 SDK 1.5.3](http://bbs.espressif.com/)
 - and a Makefile based on the example in the book [Kolban's Book on ESP8266](http://neilkolban.com/tech/esp8266/)
 
-Special credits to Mikhail Grigorev "CHERTS" for the seamless integration of the ESP8266 toolchain with Eclipse.
+Special credits to [Mikhail Grigorev](https://github.com/CHERTS) for the seamless integration of the ESP8266 toolchain with Eclipse.
 
 #### Configuration ####
 
@@ -56,7 +56,9 @@ Currently the WLAN access point configuration and the IP address and port of the
 
 ## Management Service ##
 
-By running a specifically tailored service in your network you can manage the operation of one or more WLAN control units. It is intentional that the WLAN control unit acts as TCP client and not as TCP server. This approach is slightly off in respect to many current IoT examples but hacking the WLAN control unit over the network will be a little bit more difficult this way.
+By running a specifically tailored service in your network you can manage the operation of one or more WLAN control units. It is intentional that the WLAN control unit acts as TCP client and not as TCP server. This approach is slightly off in respect to many current IoT examples but hacking the WLAN control unit over the network will be a little bit more difficult this way. 
+
+An example implementation of a multi valve management service for the [FHEM SmartHome Server](https://fhem.de/) can be found [here](https://github.com/jnsbyr/fhem#gardena-01251-irrigation-valve-management).
 
 
 ## Conclusions ##
@@ -88,7 +90,7 @@ The initial decision for the prototype fell on the 3rd variant using 3 MOSFETs a
 
 The power requirements for the ESP8266 SoC could be reduced significantly by reducing the minimum runtime from about 1700 ms to about 500 ms. This was possible by moving to the more recent Espressif ESP SDK versions. It is the combined effect of the removal of a workaround required for the earlier Espressif ESP SDK versions to avoid spurious high power draw in deep sleep (by disassociating from the AP before shutdown and reassociating after startup), event based AP connect detection and event based TCP connect/send/receive/disconnect detection.
 
-After 3 year of operation the inner contact of the female RCA connector was completely corroded and had to be replaced. This was due to the low price of the component and the humid operation environment. Next to the waterproof case the connector must be of high quality to avoid this kind of maintenance.
+After 3 years of operation the inner contact of the female RCA connector was completely corroded and had to be replaced. This was due to the low price of the component and the humid operation environment. Next to the waterproof case the connector must be of high quality to avoid this kind of maintenance.
 
 
 ## Licenses ##
