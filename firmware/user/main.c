@@ -61,12 +61,13 @@
 #include <gpio.h>
 #include <osapi.h>
 #include <user_interface.h>
+#include <version.h>
 #include <json/jsonparse.h>
 #include "esp_time.h"
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.1.2"
+#define VERSION "0.9.2.0"
 
 #define SLEEPER_STATE_MAGIC 0xB4B0
 
@@ -75,6 +76,7 @@
 #define USER_WAKEUP_GPIO_FUNC FUNC_GPIO14
 #define USER_WAKEUP_GPIO 14
 
+// variables
 LOCAL os_timer_t comTimer;
 LOCAL int32 comTimeout;
 LOCAL SleeperStateT state;
@@ -132,7 +134,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
 
   uint64* startTime = (uint64*)start;
   uint64 serverTime = 0;
-  uint16 activityCount = MAX_ACTIVITIES; // disable clearing current activities
+  uint16 activityCount = MAX_ACTIVITIES; // prevent clearing of current activities
   uint8 setTime = state.rtcMem.lastShutdownTime < 946684800000; // invalid if before 01.01.2000;
 
   int type;
@@ -283,7 +285,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
           activityCount = 0; // when program id changes new activities must be supplied - otherwise old activities will be cleared
         }
       }
-      else if (jsonparse_strcmp_value(&jsonParser, "activities") == 0)
+      else if (jsonparse_strcmp_value(&jsonParser, "activities") == 0 && state.rtcMem.activityProgramId > 0 && activityCount == 0)
       {
         jsonparse_next(&jsonParser);
         if (jsonparse_next(&jsonParser) == JSON_TYPE_ARRAY)
@@ -292,7 +294,6 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
           uint8 activityDay;
           uint16 activityStart;
           uint16 activityDuration;
-          activityCount = 0;
           do
           {
             if ((type = jsonparse_next(&jsonParser)) == JSON_TYPE_OBJECT)
@@ -385,40 +386,43 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
   }
 
   // synchronize time if sync is requested
-  if (serverTime > 0 && setTime) // || state.rtcMem.override || *startTime >= serverTime || (*startTime + 1000UL*state.rtcMem.manualDuration <= serverTime)))
+  if (serverTime > 0)
   {
-    // fix last shutdown time
-    uint64 lastShutdownTime = state.rtcMem.lastShutdownTime;
-    state.rtcMem.lastShutdownTime = serverTime - (rxTime/1000 + state.rtcMem.lastDowntime + state.rtcMem.boottime);
-    state.timeSynchronized = true;
-    //ets_uart_printf("time synchronized\r\n");
-
-    // fix valve close time
-    if (state.rtcMem.valveCloseTimeEstimated && state.rtcMem.valveCloseTime > 0)
+    if (setTime) // || state.rtcMem.override || *startTime >= serverTime || (*startTime + 1000UL*state.rtcMem.manualDuration <= serverTime)))
     {
-      if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
-      {
-        state.rtcMem.valveCloseTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
-      }
-      else
-      {
-        state.rtcMem.valveCloseTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
-      }
-      state.rtcMem.valveCloseTimeEstimated = false;
-    }
+      // fix last shutdown time
+      uint64 lastShutdownTime = state.rtcMem.lastShutdownTime;
+      state.rtcMem.lastShutdownTime = serverTime - (rxTime/1000 + state.rtcMem.lastDowntime + state.rtcMem.boottime);
+      state.timeSynchronized = true;
+      //ets_uart_printf("time synchronized\r\n");
 
-    // fix override end time
-    if (state.rtcMem.overrideEndTimeEstimated && state.rtcMem.overrideEndTime > 0)
-    {
-      if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
+      // fix valve close time
+      if (state.rtcMem.valveCloseTimeEstimated && state.rtcMem.valveCloseTime > 0)
       {
-        state.rtcMem.overrideEndTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
+        if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
+        {
+          state.rtcMem.valveCloseTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
+        }
+        else
+        {
+          state.rtcMem.valveCloseTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
+        }
+        state.rtcMem.valveCloseTimeEstimated = false;
       }
-      else
+
+      // fix override end time
+      if (state.rtcMem.overrideEndTimeEstimated && state.rtcMem.overrideEndTime > 0)
       {
-        state.rtcMem.overrideEndTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
+        if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
+        {
+          state.rtcMem.overrideEndTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
+        }
+        else
+        {
+          state.rtcMem.overrideEndTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
+        }
+        state.rtcMem.overrideEndTimeEstimated = false;
       }
-      state.rtcMem.overrideEndTimeEstimated = false;
     }
   }
 }
@@ -431,7 +435,11 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
 void comProcessing(void)
 {
   os_timer_disarm(&comTimer);
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+  os_timer_arm(&comTimer, 1, false);
+#else
   os_timer_arm(&comTimer, 1, NULL);
+#endif
 }
 
 /**
@@ -540,7 +548,11 @@ LOCAL void comTimerCallback(void *arg)
   if (wlanConnecting && comTimeout > 0)
   {
     // passive wait for WLAN link to AP
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+    os_timer_arm(&comTimer, WLAN_TIMER_PERIOD, false);
+#else
     os_timer_arm(&comTimer, WLAN_TIMER_PERIOD, NULL);
+#endif
   }
   else if (!readyForShutdown)
   {
@@ -548,7 +560,11 @@ LOCAL void comTimerCallback(void *arg)
     if (!uplink_hasReceived() && comTimeout > 0)
     {
       // passive wait for TCP reply
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+#else
       os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#endif
     }
     else if (statusSent)
     {
@@ -561,7 +577,11 @@ LOCAL void comTimerCallback(void *arg)
       else
       {
         // keep waiting for confirmation or timeout
-        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+#else
+      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#endif
       }
     }
     else
@@ -609,7 +629,11 @@ LOCAL void comTimerCallback(void *arg)
         // passive wait for TCP transmit and disconnect confirmation
         statusSent = true;
         comTimeout = UPLINK_TIMER_PERIOD; // limit max. time for status transmission and socket close to one timer period
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+#else
         os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#endif
       }
       else
       {
@@ -621,7 +645,11 @@ LOCAL void comTimerCallback(void *arg)
           // passive wait for disconnect confirmation
           statusSent = true;
           comTimeout = UPLINK_TIMER_PERIOD; // limit max. time for socket close to one timer period
-          os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+#else
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+#endif
         }
         else
         {
@@ -730,10 +758,49 @@ LOCAL void wifiEventCallback(System_Event_t *evt)
 }
 
 /**
- * dummy implementation (required)
+ * dummy implementation
+ *
+ * required for ESP8266_NONOS_SDK_v1.5.2 to ESP8266_NONOS_SDK_v2.2.1
  */
 void ICACHE_FLASH_ATTR user_rf_pre_init(void)
 {
+  // e.g. system_phy_set_rfoption()
+}
+
+/**
+ * non-OTA flash map: set the 5th 4k sector from the end of the flash to store the RF_CAL parameter
+ *
+ * required for ESP8266_NONOS_SDK_v1.5.2 to ESP8266_NONOS_SDK_v2.2.1
+ */
+uint32 ICACHE_FLASH_ATTR user_rf_cal_sector_set()
+{
+  uint32 rf_cal_sector = 0;
+
+  enum flash_size_map size_map = system_get_flash_size_map();
+  switch (size_map) {
+    case FLASH_SIZE_4M_MAP_256_256:
+      rf_cal_sector = 128 - 5;
+      break;
+    case FLASH_SIZE_8M_MAP_512_512:
+      rf_cal_sector = 256 - 5;
+      break;
+    case FLASH_SIZE_16M_MAP_512_512:
+    case FLASH_SIZE_16M_MAP_1024_1024:
+      rf_cal_sector = 512 - 5;
+      break;
+    case FLASH_SIZE_32M_MAP_512_512:
+    case FLASH_SIZE_32M_MAP_1024_1024:
+      rf_cal_sector = 512 - 5;
+      break;
+    case FLASH_SIZE_64M_MAP_1024_1024:
+      rf_cal_sector = 2048 - 5;
+      break;
+    case FLASH_SIZE_128M_MAP_1024_1024:
+      rf_cal_sector = 4096 - 5;
+      break;
+  }
+
+  return rf_cal_sector;
 }
 
 /**
@@ -934,7 +1001,11 @@ void ICACHE_FLASH_ATTR user_init(void)
   // passive wait for WLAN connection
   os_timer_disarm(&comTimer);
   os_timer_setfn(&comTimer, (os_timer_func_t*) comTimerCallback, NULL);
+#if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
+  os_timer_arm(&comTimer, MAX_WLAN_TIME/2, false); // milliseconds timeout
+#else
   os_timer_arm(&comTimer, MAX_WLAN_TIME/2, NULL); // milliseconds timeout
+#endif
 
   //ets_uart_printf("Sleeper init completed in %lu ms!\r\n", system_get_time()/1000);
 }

@@ -145,3 +145,7 @@ CHANGES
 0.9.1.2 - 20.04.2018
   double timeout when using DHCP
   report valve driver type by appending 'C' (capacitor) or 'H' (H-bridge) to version
+
+0.9.2.0 - 27.12.2018
+  based on SDK 2.2.2-dev(d5966c3)
+  skip parsing activies if program ID is zero or program ID has not changed (bugfix)

@@ -1,7 +1,7 @@
-# 
-# Makefile for ESP8266 projects 
 #
-# Based on the example in the book 'Kolban's Book on ESP8266' 
+# Makefile for ESP8266 projects
+#
+# Based on the example in the book 'Kolban's Book on ESP8266'
 # from Neil Koban (http://neilkolban.com/tech/esp8266/)
 #
 # dependencies:
@@ -12,29 +12,35 @@
 #
 
 # project name
-TARGET		= sleeper-0.9.1.2
+TARGET = sleeper-0.9.2.0
 
 # source subdirectories
-MODULES		= user driver
+MODULES = user driver
 
 # libraries, mainly provided by the SDK
-LIBS			= c gcc hal phy pp net80211 lwip wpa crypto main json
+LIBS = c gcc hal phy pp net80211 lwip wpa crypto main json
 
 # ESP8266 flash parameters (dependent on ESP8266 hardware)
-#FLASHPARMS	= --flash_freq 40m --flash_mode qio --flash_size 4m
-FLASHPARMS	= --flash_freq 40m --flash_mode dio --flash_size 8m
+FLASHPARMS  = --flash_freq 40m --flash_mode qio --flash_size 4m
+#FLASHPARMS = --flash_freq 40m --flash_mode dio --flash_size 8m
 
 # flash tool parameters (dependent on PC UART hardware)
-ESPPORT		= COM5
-ESPBAUD		= 74880
+ESPPORT = COM5
+ESPBAUD = 74880
 
 # Xtensa LX compiler path
-XTENSA_TOOLS_ROOT	?= c:/Espressif/xtensa-lx106-elf/bin
+XTENSA_TOOLS_ROOT ?= c:/Espressif/xtensa-lx106-elf/bin
 
-# Espressif SDK paths
-SDK_BASE		?= C:/Espressif/ESP8266_SDK
-SDK_TOOLS	?= C:/Espressif/utils
-ESPTOOL		?= $(SDK_TOOLS)/esptool.exe
+# Espressif SDK
+# SDK 1.5.3 - 18.04.2016
+# SDK 2.2.2 - 26.12.2018
+#SDK_BASE  ?= C:/Espressif/ESP8266_SDK_153
+SDK_BASE  ?= C:/Espressif/ESP8266_SDK_220
+SDK_TOOLS ?= C:/Espressif/utils
+ESPTOOL   ?= $(SDK_TOOLS)/esptool.exe
+#ESPINITDATA = $(SDK_BINDIR)/esp_init_data_default.bin
+ESPINITDATA = $(SDK_BINDIR)/esp_init_data_default_v8.bin
+#ESPINITDATA = esp_init_data_setting.bin
 
 
 #
@@ -42,59 +48,59 @@ ESPTOOL		?= $(SDK_TOOLS)/esptool.exe
 #
 
 # Espressif SDK subdirectories
-SDK_BINDIR	= bin
-SDK_LIBDIR	= lib
-SDK_LDDIR	= ld
-SDK_INCDIR	= include include/json
+SDK_BINDIR = bin
+SDK_LIBDIR = lib
+SDK_LDDIR  = ld
+SDK_INCDIR = include include/json
 
 # compiler flags
-CFLAGS		= -Os -O2 \
-               -std=gnu99 \
-               -g \
-               -Wpointer-arith \
-               -Wundef \
-               -Werror \
-               -Wl,-EL \
-               -fno-inline-functions \
-               -nostdlib \
-               -mlongcalls \
-               -mtext-section-literals \
-               -ffunction-sections \
-               -fdata-sections \
-               -Wno-implicit-function-declaration \
-               -mno-serialize-volatile \
-               -D__ets__ \
-               -DICACHE_FLASH
+CFLAGS = -Os -O2 \
+         -std=c99 \
+         -g \
+         -Wpointer-arith \
+         -Wundef \
+         -Werror \
+         -Wl,-EL \
+         -fno-inline-functions \
+         -nostdlib \
+         -mlongcalls \
+         -mtext-section-literals \
+         -ffunction-sections \
+         -fdata-sections \
+         -Wno-implicit-function-declaration \
+         -mno-serialize-volatile \
+         -D__ets__ \
+         -DICACHE_FLASH
 
-# linker flags 
-LDFLAGS		= -nostdlib -Wl,--no-check-sections -u call_user_start -Wl,-static
+# linker flags
+LDFLAGS = -nostdlib -Wl,--no-check-sections -u call_user_start -Wl,-static
 
-# linker script 
-LD_SCRIPT	= eagle.app.v6.ld
+# linker script
+LD_SCRIPT = eagle.app.v6.ld
 
 # select compiler, librarian and linker
-CC			:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
-AR			:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-ar
-LD			:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
-OBJCOPY		:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objcopy
-OBJDUMP		:= $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objdump
+CC      := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
+AR      := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-ar
+LD      := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-gcc
+OBJCOPY := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objcopy
+OBJDUMP := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objdump
 
 # setup input and output paths as well as build objects
-INCDIR		= $(MODULES) include
-BUILD_BASE	= build
-FW_BASE		= firmware
-SDK_BINDIR	:= $(addprefix $(SDK_BASE)/, $(SDK_BINDIR))
-SDK_LIBDIR	:= $(addprefix $(SDK_BASE)/, $(SDK_LIBDIR))
-SDK_INCDIR	:= $(addprefix -I$(SDK_BASE)/, $(SDK_INCDIR))
-INCDIR		:= $(addprefix -I, $(INCDIR))
-MODULE_INCDIR	:= $(addsuffix /include, $(INCDIR))
-LD_SCRIPT	:= $(addprefix -T$(SDK_BASE)/$(SDK_LDDIR)/, $(LD_SCRIPT))
-LIBS			:= $(addprefix -l, $(LIBS))
-APP_AR		:= $(addprefix $(BUILD_BASE)/, $(TARGET)_app.a)
-TARGET_OUT	:= $(addprefix $(BUILD_BASE)/, $(TARGET).out)
-BUILD_DIR	= $(addprefix $(BUILD_BASE)/, $(MODULES)) $(FW_BASE)
-SRC			= $(foreach moduleDir, $(MODULES), $(wildcard $(moduleDir)/*.c))
-OBJS			= $(patsubst %.c, $(BUILD_BASE)/%.o, $(SRC))
+INCDIR        = $(MODULES) include
+BUILD_BASE    = build
+FW_BASE       = firmware
+SDK_BINDIR    := $(addprefix $(SDK_BASE)/, $(SDK_BINDIR))
+SDK_LIBDIR    := $(addprefix $(SDK_BASE)/, $(SDK_LIBDIR))
+SDK_INCDIR    := $(addprefix -I$(SDK_BASE)/, $(SDK_INCDIR))
+INCDIR        := $(addprefix -I, $(INCDIR))
+MODULE_INCDIR := $(addsuffix /include, $(INCDIR))
+LD_SCRIPT     := $(addprefix -T$(SDK_BASE)/$(SDK_LDDIR)/, $(LD_SCRIPT))
+LIBS          := $(addprefix -l, $(LIBS))
+APP_AR        := $(addprefix $(BUILD_BASE)/, $(TARGET)_app.a)
+TARGET_OUT    := $(addprefix $(BUILD_BASE)/, $(TARGET).out)
+BUILD_DIR     = $(addprefix $(BUILD_BASE)/, $(MODULES)) $(FW_BASE)
+SRC           = $(foreach moduleDir, $(MODULES), $(wildcard $(moduleDir)/*.c))
+OBJS          = $(patsubst %.c, $(BUILD_BASE)/%.o, $(SRC))
 
 all: checkdirs $(TARGET_OUT)
 	@echo "ESP8266 firmware files for $(TARGET) built!"
@@ -107,21 +113,21 @@ $(APP_AR): $(OBJS)
 $(BUILD_BASE)/%.o : %.c
 	$(CC) $(INCDIR) $(MODULE_INCDIR) $(SDK_INCDIR) $(CFLAGS) -c $< -o $@
 
-# check required build directories 
+# check required build directories
 checkdirs: $(BUILD_DIR)
 
-# create build directory structure 
+# create build directory structure
 $(BUILD_DIR):
 	@mkdir --parents --verbose $@
 
-# create ESP8266 firmware files    
+# create ESP8266 firmware files
 $(TARGET_OUT): $(APP_AR)
 	$(LD) -L$(SDK_LIBDIR) $(LD_SCRIPT) $(LDFLAGS) -Wl,--start-group $(LIBS) $(APP_AR) -Wl,--end-group -o $@
 	$(OBJDUMP) --headers --section=.data \
-                         --section=.rodata \
-                         --section=.bss \
-                         --section=.text \
-                         --section=.irom0.text $@
+                       --section=.rodata \
+                       --section=.bss \
+                       --section=.text \
+                       --section=.irom0.text $@
 	$(SDK_TOOLS)/memanalyzer.exe $(OBJDUMP).exe $@
 	$(OBJCOPY) --only-section .text --output-target binary $@ eagle.app.v6.text.bin
 	$(OBJCOPY) --only-section .data --output-target binary $@ eagle.app.v6.data.bin
@@ -135,17 +141,21 @@ $(TARGET_OUT): $(APP_AR)
 flash: all
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
                0x00000 $(FW_BASE)/eagle.flash.bin \
-               0x40000 $(FW_BASE)/eagle.irom0text.bin
+               0x10000 $(FW_BASE)/eagle.irom0text.bin
 
-flash-init-data-4M: 
+flash-init-data-4M:
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
-               0x7C000 $(SDK_BINDIR)/esp_init_data_default.bin
+               0x7C000 $(ESPINITDATA)
 
-flash-init-data-8M: 
+flash-init-data-8M:
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
-               0xFC000 $(SDK_BINDIR)/esp_init_data_default.bin
+               0xFC000 $(ESPINITDATA)
 
-flash-default-params-8M: 
+flash-default-params-4M:
+	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+               0x7E000 $(SDK_BINDIR)/blank.bin
+
+flash-default-params-8M:
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
                0xFE000 $(SDK_BINDIR)/blank.bin
 
@@ -163,4 +173,4 @@ readMac:
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) read_mac
 
 imageInfo:
-	$(ESPTOOL) image_info $(FW_BASE)/eagle.flash.bin      
+	$(ESPTOOL) image_info $(FW_BASE)/eagle.flash.bin
