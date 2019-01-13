@@ -5,6 +5,7 @@ This project is a proof of concept applied to a practical purpose, especially re
 - power consumption of the ESP8266 can be reduced to allow continuous operation over several months with a 2600 mAh battery
 - real time keeping is possible without an RTC
 - using a TCP client improves network security
+- the single analog input of the ESP8266 can be used for simultaneously monitoring the supply voltage and measuring the valve and wiring resistance
 
 The firmware is intended for an Espressif ESP8266 SoC to control the Gardena solenoid irrigation valve no. 1251 via WLAN. The management network protocol uses JSON for all telegrams.
 
@@ -44,19 +45,19 @@ The firmware was build using
 
 - the [Unofficial Development Kit for Espressif ESP8266](https://github.com/CHERTS/esp8266-devkit)
 - with [Eclipse Luna](https://eclipse.org/luna/)
-- using the [Espressif ESP8266 SDK 1.5.3](http://bbs.espressif.com/)
+- using the [Espressif ESP8266 SDK 2.2.2](http://bbs.espressif.com/)
 - and a Makefile based on the example in the book [Kolban's Book on ESP8266](http://neilkolban.com/tech/esp8266/)
 
 Special credits to [Mikhail Grigorev](https://github.com/CHERTS) for the seamless integration of the ESP8266 toolchain with Eclipse.
 
 #### Configuration ####
 
-Currently the WLAN access point configuration and the IP address and port of the management service must be set in the file _user__config.h_ before building the firmware. In a future release this configuration will be done by WLAN without the need of changing the firmware. Also check if _FLASHPARMS_ in the Makefile matches the flash type of your ESP8266.
+Currently the WLAN access point configuration and the IP address and port of the management service must be set in the file _user__config.h_ before building the firmware. In a future release this configuration will be done by WLAN without the need of changing the firmware. Also check if _FLASHSIZE_ and _FLASHPARMS_ in the Makefile matches the flash type of your ESP8266.
 
 
 ## Management Service ##
 
-By running a specifically tailored service in your network you can manage the operation of one or more WLAN control units. It is intentional that the WLAN control unit acts as TCP client and not as TCP server. This approach is slightly off in respect to many current IoT examples but hacking the WLAN control unit over the network will be a little bit more difficult this way. 
+By running a specifically tailored service in your network you can manage the operation of one or more WLAN control units. It is intentional that the WLAN control unit acts as TCP client and not as TCP server. This approach is slightly off in respect to many current IoT examples but hacking the WLAN control unit over the network will be a little bit more difficult this way.
 
 An example implementation of a multi valve management service for the [FHEM SmartHome Server](https://fhem.de/) can be found [here](https://github.com/jnsbyr/fhem#gardena-01251-irrigation-valve-management).
 
@@ -88,29 +89,30 @@ Before starting this projects several alternatives were considered for the latch
 
 The initial decision for the prototype fell on the 3rd variant using 3 MOSFETs and a 1 mF capacitor because this approach seemed to require the least amount of energy. While the concept proved to be true it seemed not to work reliably with different valves. The original Gardena valve control unit no. 1250 uses square pulses resulting in a constant current that a reasonably sized capacitor cannot provide - and some valves seemed to require the additional boost. Further increasing the capacitance is an option but it also increases the demands on the power supply and the required discharging times thus countering the energy saving aspects. To create the same pulses as the original Gardena valve control unit the 2nd hardware design uses a H-bridge. As it turned out, the true reason for the observed unreliability was caused by the RCA connector of the valve that did not connect properly. Using suitable pliers the diameter of the outer ring of the RCA attached to the valve can be slightly reduced to provide more contact tension. Both drivers variants are suitable for the valve with the capacitor driver using slightly less energy but requiring more PCB space (at least when using discrete components). The capacitor driver proves that the energy (pulse duration) used by the original Gardena valve control unit is much higher than typically necessary to operate the valve, especially the open duration.
 
-The power requirements for the ESP8266 SoC could be reduced significantly by reducing the minimum runtime from about 1700 ms to about 500 ms. This was possible by moving to the more recent Espressif ESP SDK versions. It is the combined effect of the removal of a workaround required for the earlier Espressif ESP SDK versions to avoid spurious high power draw in deep sleep (by disassociating from the AP before shutdown and reassociating after startup), event based AP connect detection and event based TCP connect/send/receive/disconnect detection.
+The power requirements for the ESP8266 SoC could be reduced significantly by reducing the minimum runtime from about 1700 ms to about 500 ms when not operating the valve. This was possible by moving to the more recent Espressif ESP SDK 1.5.3. It is the combined effect of the removal of a workaround required for the earlier Espressif ESP SDK versions to avoid spurious high power draw in deep sleep (by disassociating from the AP before shutdown and reassociating after startup), event based AP connect detection and event based TCP connect/send/receive/disconnect detection.
 
 After 3 years of operation the inner contact of the female RCA connector was completely corroded and had to be replaced. This was due to the low price of the component and the humid operation environment. Next to the waterproof case the connector must be of high quality to avoid this kind of maintenance.
+
+In the 4th year of operation the RCA connector corrosion was the only real issue, while battery life has increased to more than 6 months, probably due to the modified WiFi handling introduced in the application after switching to Espressif ESP SDK 1.5.3. Covering the top of the valve with a watertight hood, like the original Gardena valve control unit does, helps to reduce the contact corrosion. Monitoring the valve and wiring resistance allows to detect pending failure. This requires an ADC input and both the relay driver and the H-bridge driver also need a shunt and an analog amplifier or a high resolution ADC to check the current to the valve. This disqualifies both driver types because it causes additional power consumption. With the capacitor driver it is enough to check the voltage of the capacitor. The ESP8266 has a suitable analog input but it is already in use for the supply voltage monitoring, so a 2-channel analog MUX is needed. Fortunately half of the MUX is already built into the ESP8266. It is enough to keep the voltage of the capacitor disconnected from TOUT when measuring the supply voltage VDD33 and this can be done with a another MOSFET that is directly controlled by GPIO 12. A single call of readvdd33() in user_init() for the supply voltage and an average of the output from system_adc_read_fast() for the voltage of the capacitor yield reproduceable results, the latter both with and without RF enabled. The same can be said about the resistance measurement with an absolute accuracy better than 10% at 40 ohm without calibration.
 
 
 ## Licenses ##
 
 #### Pictures, Schematic and Layout ####
 
-Copyright (c) 2015-2016 jnsbyr
+Copyright (c) 2015 jnsbyr
 Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public License (CC BY-NC-SA 4.0)
 
 #### Firmware ####
 
-Copyright (c) 2015-2018 jnsbyr
+Copyright (c) 2015 jnsbyr
 Apache 2.0 License
 
 The firmware source code depends on:
 
-#### Espressif ESP SDK 1.5.3 ####
+#### Espressif ESP SDK 2.2.0 ####
 
 Copyright (c) 2015 <ESPRESSIF SYSTEMS (SHANGHAI) PTE LTD>
-ESPRSSIF MIT License
-http://bbs.espressif.com/
+ESPRESSIF MIT License
 
 see LICENSE file of Espressif ESP SDK for more details

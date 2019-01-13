@@ -56,7 +56,7 @@ LOCAL void ICACHE_FLASH_ATTR clientSentCallback(void *arg)
   struct espconn *pespconn = arg;
   connState = TCP_SENT;
 
-//  ets_uart_printf("TCP sent\r\n");
+  // ets_uart_printf("TCP sent\r\n");
 
   if (rxPayload[0])
   {
@@ -74,7 +74,7 @@ LOCAL void ICACHE_FLASH_ATTR clientReceiveCallback(void *arg, char *pdata, unsig
   rxPayloadSize = len;
   connState = TCP_RECEIVED;
 
-  //  ets_uart_printf("TCP message received: %s\r\n", rxPayload);
+  // ets_uart_printf("TCP message received: %s\r\n", rxPayload);
 
   // trigger receive processing
   comProcessing();
@@ -122,7 +122,7 @@ LOCAL void ICACHE_FLASH_ATTR clientErrorCallback(void *arg, sint8 err)
 
   if (err != ESPCONN_OK)
   {
-    ets_uart_printf("ERROR: TCP connect failed: %d\r\n", err);
+    ets_uart_printf("ERROR: TCP connection error: %d\r\n", err);
     if (pespconn != NULL)
     {
       // try to close connection anyway
@@ -131,7 +131,7 @@ LOCAL void ICACHE_FLASH_ATTR clientErrorCallback(void *arg, sint8 err)
   }
   else
   {
-    ets_uart_printf("clientErrorCallback\r\n");
+    ets_uart_printf("ERROR: undefined TCP connection error\r\n");
   }
 }
 

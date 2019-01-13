@@ -18,19 +18,22 @@
  *
  * project: WLAN control unit for Gardena solenoid irrigation valve no. 1251
  *
- * file:    valve.h
+ * file:    adc.h
  *
- * created: 24.04.2015
+ * created: 30.12.2018
  *
  *****************************************************************************/
 
-#ifndef __USER_VALVE_H__
-#define __USER_VALVE_H__
+#ifndef __USER_ADC_H__
+#define __USER_ADC_H__
 
 #include "main.h"
 
-void   ICACHE_FLASH_ATTR valveDriverInit(void);
-uint64 ICACHE_FLASH_ATTR valveControl(SleeperStateT* sleeperState, uint8 setMode, uint64 startTime, uint8 toggleOverride, uint8 ignoreOverride);
-void   ICACHE_FLASH_ATTR valveDriverShutdown(void);
+void ICACHE_FLASH_ATTR adcDriverInit();
+void ICACHE_FLASH_ATTR adcDriverShutdown();
 
-#endif /* __USER_VALVE_H__ */
+#if VALVE_DRIVER_TYPE == 1
+uint16 adcRead();
+#endif /* VALVE_DRIVER_TYPE == 1 */
+
+#endif /* __USER_ADC_H__ */

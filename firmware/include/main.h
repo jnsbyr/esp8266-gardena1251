@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015-2016 jnsbyr
+ * Copyright (c) 2015-2019 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,8 @@
 #include <c_types.h>
 #include <ip_addr.h>
 
+#include "user_config.h"
+
 #define SLEEPER_BOOTTIME            87 // [ms] bootloader runtime after reset
 #define SLEEPER_COMMANDTIME        600 // [ms] 0.6 s, typical time runtime (boot, AP connect and TCP handshake)
 #define SLEEPER_MIN_DOWNTIME      1000 // [ms] 1.0 s, minimum time between shutdown and restart
@@ -46,13 +48,15 @@
 #define MAX_ACTIVITIES 32
 
 
-enum SleeperMode {MODE_OFF         = 0,
-                  MODE_MANUAL      = 1,
-                  MODE_AUTO        = 2};
+enum SleeperMode {MODE_OFF    = 0,
+                  MODE_MANUAL = 1,
+                  MODE_AUTO   = 2};
 
-enum ValveState {VALVE_CLOSED      = 0,
-                 VALVE_OPEN        = 1,
-                 VALVE_LOW_BAT     = 2};
+enum ValveStatus {VALVE_STATUS_UNKNOWN           = 0,
+                  VALVE_STATUS_OK                = 1,
+                  VALVE_STATUS_BAD_WIRING        = 2,
+                  VALVE_STATUS_LOW_OPEN_VOLTAGE  = 3,
+                  VALVE_STATUS_LOW_CLOSE_VOLTAGE = 4};
 
 enum ActivityDay {DAY_INVALID = 0,
                   DAY_EVERY   = 1,
@@ -68,37 +72,52 @@ typedef struct          // 5 Byte
   uint16 duration;      // seconds
 } ActivityT;
 
-typedef struct                          // 62 + N*5 Byte
+#define SLEEPER_STATE_MAGIC 0xB5B0
+
+typedef struct                          // 96 + N*5 Byte
 {
   uint16 magic;                         // static
-  uint8  mode;                          // config
-  uint8  valveOpen;                     // state, bool, valve state
+
+  uint8  mode;                          // config, requested mode
   uint8  offMode;                       // state, mode to set after valve is switched off
-  uint8  lowBattery;                    // state, bool, vdd33 voltage is below hard coded limit
-  uint8  override;                      // state, bool, manual override of current activity
   uint8  overriddenMode;                // state, mode to set when override ends
-  uint8  valveCloseTimeEstimated;       // state, bool, valve close time is only estimated
+  uint8  override;                      // state, bool, manual override of current activity
   uint8  overrideEndTimeEstimated;      // state, bool, override end time is only estimated
+  uint8  valveOpen;                     // state, bool, valve state
+  uint8  valveCloseTimeEstimated;       // state, bool, valve close time is only estimated
+  uint8  lowBattery;                    // state, bool, vdd33 voltage is below hard coded limit
+  uint8  lowBatteryTimeEstimated;       // state, bool, low bat reporting time is only estimated
+  uint8  lastValveOperationStatus;      // state, status of last valve operation
+
+  uint16 valveSupplyVoltage;            // state, volt, valve driver supply voltage, max. detected since init
   uint16 totalOpenCount;                // state, total number valve was opened since init
+  uint16 valveResistance;               // state, ohm, valve resistance, detected while opening
+  uint16 maxValveResistance;            // config, ohm, max. valve resistance
   uint16 boottime;                      // config, milliseconds
-  uint16 defaultDuration;               // config, seconds, default duration to open vale (manual mode, override)
+  uint16 defaultDuration;               // config, seconds, default duration to keep vale open (manual mode, override)
   uint16 downtimeScale;                 // config, 10000 = 1.0
   sint16 batteryOffset;                 // config, millivolt
+
   uint32 activityProgramId;             // config
   uint32 downtime;                      // config, milliseconds
   uint32 lastDowntime;                  // state, milliseconds, last sleep duration
   uint32 totalOpenDuration;             // state, seconds, total duration the valve was open since init
+
   uint64 valveOpenTime;                 // state, milliseconds, time when valve was opened
   uint64 valveCloseTime;                // state, milliseconds, time when valve must be closed
   uint64 lastShutdownTime;              // state, milliseconds, time when last os shutdown was initiated
   uint64 overrideEndTime;               // state, milliseconds, time when override is reset
+  uint64 lowBatteryTime;                // state, milliseconds, time until permanent deep sleep to report low bat
+
   struct ip_info ipConfig;              // state
+
   ActivityT activities[MAX_ACTIVITIES]; // config
 } PersistentStateT;
 
 typedef struct
 {
   PersistentStateT rtcMem; // persistent values
+  uint64 now;              // last sampled real time [ms]
   sint16 batteryVoltage;   // supply voltage at time of boot
   sint8  rssi;             // RSSI at time of connect
   uint8  timeSynchronized; // bool, current time is synchronized with server

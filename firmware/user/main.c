@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- * Copyright (c) 2015-2018 jnsbyr
+ * Copyright (c) 2015-2019 jnsbyr
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,16 +42,12 @@
  *
  *****************************************************************************
  *
- * @todo permanent shutdown on low bat to prevent battery drain
  * @todo improve estimate of totalOpenDuration in manual override mode
  * @todo config of access point parameters in AP mode on initial startup (via mini-webserver?) -> flash
- * @todo UDP service advertisement broadcast for server/port -> flash
- * @todo reset flash config (via GPIO?)
- *
+ * @todo UDP service advertisement broadcast to receive config for server/port
+ * @todo reset flash config (via GPIO? e.g. very long press?)
  * @todo make UART debug output optional
- *
- * @todo dynamically enable/disable WLAN?
- * @todo support modification of runtime while valve is open?
+ * @todo support modification of runtime while valve is open
  *
  *****************************************************************************/
 
@@ -64,17 +60,22 @@
 #include <version.h>
 #include <json/jsonparse.h>
 #include "esp_time.h"
+#include "adc.h"
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.2.0"
-
-#define SLEEPER_STATE_MAGIC 0xB4B0
+#define VERSION "0.9.3.0"
 
 // manual start/stop GPIO input
 #define USER_WAKEUP_GPIO_MUX PERIPHS_IO_MUX_MTMS_U
 #define USER_WAKEUP_GPIO_FUNC FUNC_GPIO14
 #define USER_WAKEUP_GPIO 14
+
+// ESP8266 deep sleep options
+#define RF_DEFAULT  0 // RF calibration after deep-sleep depends on init data byte 108
+#define RF_CAL      1 // RF calibration after deep-sleep
+#define RF_NO_CAL   2 // no RF calibration after deep-sleep
+#define RF_DISABLED 4 // no RF after deep-sleep
 
 // variables
 LOCAL os_timer_t comTimer;
@@ -82,10 +83,10 @@ LOCAL int32 comTimeout;
 LOCAL SleeperStateT state;
 LOCAL struct ets_tm tms;
 LOCAL struct ets_tm nowTMS;
-LOCAL uint8 wlanConnected;
+LOCAL uint8 uplinkSocketConnected;
 LOCAL uint8 statusSent;
 LOCAL uint8 readyForShutdown;
-LOCAL char txMessage[256];
+LOCAL char txMessage[288];
 LOCAL uint64 nextEventTime;
 
 /**
@@ -102,6 +103,16 @@ LOCAL const char* ICACHE_FLASH_ATTR getSleeperModeAsText()
   {
     return "LOW BAT";
   }
+  else if (state.rtcMem.lastValveOperationStatus != VALVE_STATUS_OK)
+  {
+    switch (state.rtcMem.lastValveOperationStatus)
+    {
+      case VALVE_STATUS_BAD_WIRING:        return "BAD VALVE WIRING";
+      case VALVE_STATUS_LOW_OPEN_VOLTAGE:  return "LOW OPEN VOLTAGE";
+      case VALVE_STATUS_LOW_CLOSE_VOLTAGE: return "LOW CLOSE VOLTAGE";
+      default:                             return "UNDEFINED VALVE STATUS";
+    }
+  }
   else if (state.rtcMem.override)
   {
     return "OVERRIDE";
@@ -113,16 +124,17 @@ LOCAL const char* ICACHE_FLASH_ATTR getSleeperModeAsText()
       case MODE_OFF:         return "OFF";
       case MODE_MANUAL:      return "MANUAL";
       case MODE_AUTO:        return "AUTO";
-      default:               return "?";
+      default:               return "UNDEFINED MODE";
     }
   }
 }
 
 /**
- * check if GPIO 14 has low level = wakeup by user
+ * check for external reset
  */
 LOCAL uint8 isUserWakeup()
 {
+  // rstInfo->reason will always be REASON_DEEP_SLEEP_AWAKE
   PIN_FUNC_SELECT(USER_WAKEUP_GPIO_MUX, USER_WAKEUP_GPIO_FUNC);
   return GPIO_INPUT_GET(USER_WAKEUP_GPIO) == 0;
 }
@@ -177,7 +189,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
         {
           // sync time if requested or if time is invalid (after cold boot)
           setTime = setTime || set;
-          //ets_uart_printf("JSON setTime %d shutdown time %lld => %d\r\n", set, state.rtcMem.lastShutdownTime, setTime);
+          //ets_uart_printf("JSON setTime %d shutdown time %llu => %u\r\n", set, state.rtcMem.lastShutdownTime, setTime);
         }
       }
       else if (jsonparse_strcmp_value(&jsonParser, "wakeup") == 0)
@@ -203,13 +215,13 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
         {
           *mode = MODE_MANUAL;
         }
-        else if (os_strcmp(buffer, "OVERRIDE") == 0)
+        else if (os_strcmp(buffer, "OFF") == 0)
         {
-          *mode = state.rtcMem.overriddenMode;
+          *mode = MODE_OFF;
         }
         else
         {
-          *mode = MODE_OFF;
+          // keep mode unchanged
         }
       }
       else if (jsonparse_strcmp_value(&jsonParser, "start") == 0)
@@ -272,6 +284,16 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
 
           // low battery check
           state.rtcMem.lowBattery = state.batteryVoltage < MIN_BATTERY_VOLTAGE;
+        }
+      }
+      else if (jsonparse_strcmp_value(&jsonParser, "maxResistance") == 0)
+      {
+        jsonparse_next(&jsonParser);
+        jsonparse_next(&jsonParser);
+        int maxResistance = jsonparse_get_value_as_int(&jsonParser);
+        if (maxResistance != state.rtcMem.maxValveResistance && maxResistance > 0)
+        {
+          state.rtcMem.maxValveResistance = maxResistance;
         }
       }
       else if (jsonparse_strcmp_value(&jsonParser, "programId") == 0)
@@ -401,10 +423,12 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
       {
         if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
         {
+          // time advanced
           state.rtcMem.valveCloseTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
         }
         else
         {
+          // time reversed
           state.rtcMem.valveCloseTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
         }
         state.rtcMem.valveCloseTimeEstimated = false;
@@ -415,13 +439,31 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
       {
         if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
         {
+          // time advanced
           state.rtcMem.overrideEndTime += state.rtcMem.lastShutdownTime - lastShutdownTime;
         }
         else
         {
+          // time reversed
           state.rtcMem.overrideEndTime -= lastShutdownTime - state.rtcMem.lastShutdownTime;
         }
         state.rtcMem.overrideEndTimeEstimated = false;
+      }
+
+      // fix low battery time
+      if (state.rtcMem.lowBatteryTimeEstimated && state.rtcMem.lowBatteryTime > 0)
+      {
+        if (state.rtcMem.lastShutdownTime >= lastShutdownTime)
+        {
+          // time advanced
+          state.rtcMem.lowBatteryTimeEstimated += state.rtcMem.lastShutdownTime - lastShutdownTime;
+        }
+        else
+        {
+          // time reversed
+          state.rtcMem.lowBatteryTimeEstimated -= lastShutdownTime - state.rtcMem.lastShutdownTime;
+        }
+        state.rtcMem.lowBatteryTimeEstimated = false;
       }
     }
   }
@@ -432,7 +474,7 @@ LOCAL void parseReply(char* reply, uint8* mode, void* start)
  * note: directly calling comTimerCallback e.g. from socket context
  *       prevents required idle processing
  */
-void comProcessing(void)
+void comProcessing()
 {
   os_timer_disarm(&comTimer);
 #if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
@@ -459,7 +501,7 @@ LOCAL void comTimerCallback(void *arg)
 
   // log WLAN station connect status
   uint8 wlanConnecting = false;
-  if (!wlanConnected)
+  if (!uplinkSocketConnected)
   {
     switch (wifi_station_get_connect_status())
     {
@@ -495,11 +537,11 @@ LOCAL void comTimerCallback(void *arg)
         esp_gmtime(&state.rtcMem.overrideEndTime, &tms);
 
         // estimate current time
-        uint64 now = getTime();
-        esp_gmtime(&now, &nowTMS);
+        state.now = getTime();
+        esp_gmtime(&state.now, &nowTMS);
 
         // create and send TCP request
-        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s%c\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"voltage\":%d, \"RSSI\":%d}",
+        os_sprintf(txMessage, "{\"name\":\"SleeperRequest\", \"version\":\"%s%c\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"overrideEnd\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u, \"totalOpen\":%lu, \"resistance\":%u, \"voltage\":%d, \"RSSI\":%d}",
                               VERSION, VALVE_DRIVER_TYPE==2? 'H' : 'C',
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               1900 + tms.tm_year, 1 + tms.tm_mon, tms.tm_mday, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec,
@@ -508,12 +550,13 @@ LOCAL void comTimerCallback(void *arg)
                               state.rtcMem.activityProgramId,
                               state.rtcMem.totalOpenCount,
                               state.rtcMem.totalOpenDuration,
+                              state.rtcMem.valveResistance,
                               state.batteryVoltage,
                               state.rssi);
         uplink_sendRequest(REMOTE_IP, REMOTE_PORT, txMessage);
 
         // update state and wait for TCP reply
-        wlanConnected  = true;
+        uplinkSocketConnected  = true;
         comTimeout = MAX_UPLINK_TIME;
         break;
 
@@ -578,9 +621,9 @@ LOCAL void comTimerCallback(void *arg)
       {
         // keep waiting for confirmation or timeout
 #if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
-      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
 #else
-      os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
 #endif
       }
     }
@@ -609,13 +652,13 @@ LOCAL void comTimerCallback(void *arg)
       }
 
       // operate valve
-      nextEventTime = valveControl(&state, false, mode, start);
+      nextEventTime = valveControl(&state, mode, start, false, false);
 
       if (reply[0])
       {
         // reply received, create and send TCP status message
-        uint64 now = getTime();
-        esp_gmtime(&now, &nowTMS);
+        state.now = getTime();
+        esp_gmtime(&state.now, &nowTMS);
         os_sprintf(txMessage, "{\"name\":\"SleeperStatus\", \"time\":\"%u-%02u-%02uT%02u:%02u:%02u.%03uZ\", \"mode\":\"%s\", \"state\":\"%s\", \"programId\":%lu, \"opened\":%u,  \"totalOpen\":%lu, \"voltage\":%d}",
                               1900 + nowTMS.tm_year, 1 + nowTMS.tm_mon, nowTMS.tm_mday, nowTMS.tm_hour, nowTMS.tm_min, nowTMS.tm_sec, nowTMS.tm_msec,
                               getSleeperModeAsText(),
@@ -640,21 +683,21 @@ LOCAL void comTimerCallback(void *arg)
         // no reply, skip sending status and close uplink
         if (!uplink_isClosed())
         {
-        uplink_close();
+          uplink_close();
 
           // passive wait for disconnect confirmation
           statusSent = true;
           comTimeout = UPLINK_TIMER_PERIOD; // limit max. time for socket close to one timer period
 #if defined(ESP_SDK_VERSION_NUMBER) && (ESP_SDK_VERSION_NUMBER >= 2)
-        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
+          os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, false);
 #else
-        os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
+          os_timer_arm(&comTimer, UPLINK_TIMER_PERIOD, NULL);
 #endif
         }
         else
         {
           // uplink already closed, shutdown
-        readyForShutdown = true;
+          readyForShutdown = true;
         }
       }
     }
@@ -671,7 +714,7 @@ LOCAL void comTimerCallback(void *arg)
       ets_uart_printf("ERROR: TCP connection still open\r\n");
     }
 
-    // explicitly shutdown WLAN to prevent sporadically increased quiescent current
+    // explicitly shutdown WLAN early to prevent sporadically increased quiescent current
     // wifi_station_disconnect() will prolong next AP reconnect by about 1000 ms
     // @todo needs idle state to be effective?
     if (!wifi_set_sleep_type(MODEM_SLEEP_T))
@@ -682,11 +725,15 @@ LOCAL void comTimerCallback(void *arg)
     // shutdown valve GPIOs
     valveDriverShutdown();
 
+    // shutdown ADC GPIO
+    adcDriverShutdown();
+
     // estimate current time
-    state.rtcMem.lastShutdownTime = getTime();
+    state.now = getTime();
+    state.rtcMem.lastShutdownTime = state.now;
 
     // calculate next downtime
-    uint8 needWLAN = true;
+    uint8 needRFCal = true;
     if (state.rtcMem.valveOpen && state.rtcMem.downtime > MAX_VALVE_OPEN_DOWNTIME)
     {
       // valve is open, limit downtime
@@ -711,8 +758,9 @@ LOCAL void comTimerCallback(void *arg)
         // required cut back does not leave at least 1 second downtime: limit cut back and accept delay
         state.rtcMem.lastDowntime = SLEEPER_MIN_DOWNTIME;
       }
-//      // @todo skip WLAN if downtime is less than quarter of regular downtime
-//      needWLAN = 4*sleeperState.lastDowntime > sleeperState.downtime;
+
+      // skip RF calibration if downtime is less than quarter of regular downtime
+      needRFCal = 4*state.rtcMem.lastDowntime < state.rtcMem.downtime;
     }
 
     // backup state to RTC memory
@@ -723,11 +771,12 @@ LOCAL void comTimerCallback(void *arg)
 
     // say goodbye
     esp_gmtime(&state.rtcMem.lastShutdownTime, &tms);
-    ets_uart_printf("going to sleep for %lu seconds at %02u:%02u:%02u.%03uZ %02u.%02u.%u (uptime %lu ms)\r\n", state.rtcMem.lastDowntime/1000, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec, tms.tm_mday, 1 + tms.tm_mon, 1900 + tms.tm_year, system_get_time()/1000);
+    uint8 deepSleepOption = needRFCal? RF_DEFAULT : RF_NO_CAL;
+    ets_uart_printf("going to sleep for %lu seconds at %02u:%02u:%02u.%03uZ %02u.%02u.%u with deep sleep option %u (uptime %lu ms)\r\n", state.rtcMem.lastDowntime/1000, tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec, tms.tm_mday, 1 + tms.tm_mon, 1900 + tms.tm_year, deepSleepOption, system_get_time()/1000);
 
-    // go to deep sleep
-    system_deep_sleep_set_option(needWLAN? 1 : 4);
-    system_deep_sleep(((uint64)state.rtcMem.lastDowntime*state.rtcMem.downtimeScale)/10U); // microseconds
+    // go to deep sleep (set init_data byte 108 to the number of wakeups for next RF_CAL)
+    system_deep_sleep_set_option(deepSleepOption);
+    system_deep_sleep_instant(((uint64)state.rtcMem.lastDowntime*state.rtcMem.downtimeScale)/10U); // microseconds
   }
 }
 
@@ -762,7 +811,7 @@ LOCAL void wifiEventCallback(System_Event_t *evt)
  *
  * required for ESP8266_NONOS_SDK_v1.5.2 to ESP8266_NONOS_SDK_v2.2.1
  */
-void ICACHE_FLASH_ATTR user_rf_pre_init(void)
+void ICACHE_FLASH_ATTR user_rf_pre_init()
 {
   // e.g. system_phy_set_rfoption()
 }
@@ -806,13 +855,16 @@ uint32 ICACHE_FLASH_ATTR user_rf_cal_sector_set()
 /**
  * system setup
  */
-void ICACHE_FLASH_ATTR user_init(void)
+void ICACHE_FLASH_ATTR user_init()
 {
   ets_uart_printf("Gardena 9V solenoid irrigation valve controller ver: " VERSION "\r\n");
-  ets_uart_printf("Copyright (c) 2015-2018 jnsbyr, Germany\r\n\r\n");
+  ets_uart_printf("Copyright (c) 2015-2019 jnsbyr, Germany\r\n\r\n");
 
   // configure valve GPIOs
   valveDriverInit();
+
+  // configure ADC GPIO
+  adcDriverInit();
 
   // read RTC memory
   uint8 reinitState = false;
@@ -836,7 +888,8 @@ void ICACHE_FLASH_ATTR user_init(void)
   //ets_uart_printf("phy_get_vdd33 %u\r\n", phy_get_vdd33());
 
   // read vdd before operating valve and entering station mode (system_get_vdd33() requires modifying the default esp init data byte 107 0->255 and RF to be up)
-  state.batteryVoltage = readvdd33() + state.rtcMem.batteryOffset; // system_get_vdd33(); // (uint16)(phy_get_vdd33());
+  os_delay_us(30); // settle time [us]
+  state.batteryVoltage = readvdd33() + state.rtcMem.batteryOffset;
 
   // init state
   state.timeSynchronized = false;
@@ -851,7 +904,8 @@ void ICACHE_FLASH_ATTR user_init(void)
     state.rtcMem.downtimeScale   = DEFAULT_DEEP_SLEEP_SCALE; // config
     state.rtcMem.defaultDuration = DEFAULT_MANUAL_DURATION;  // config
     state.rtcMem.mode            = MODE_OFF;                 // config
-    state.rtcMem.activityProgramId = 0;                      // config
+    state.rtcMem.activityProgramId  = 0;                     // config
+    state.rtcMem.maxValveResistance = 0;                     // config
     tms.tm_mday = 1;
     tms.tm_mon  = 0;
     tms.tm_year = 70;
@@ -863,14 +917,20 @@ void ICACHE_FLASH_ATTR user_init(void)
     state.rtcMem.lastDowntime = 0;
     state.rtcMem.offMode = MODE_OFF;
     state.rtcMem.overriddenMode = MODE_OFF;
+    state.rtcMem.lastValveOperationStatus = VALVE_STATUS_UNKNOWN;
     state.rtcMem.valveOpen = true;  // preset to force immediate closing
     state.rtcMem.override = false;
+    state.rtcMem.lowBattery = false;
     state.rtcMem.ipConfig.ip.addr = 0;
+    state.rtcMem.valveSupplyVoltage = 0;  // preset to force detection
+    state.rtcMem.valveResistance = 0;
     state.rtcMem.valveOpenTime = 0;
     state.rtcMem.valveCloseTime = 0;
     state.rtcMem.valveCloseTimeEstimated = 0;
     state.rtcMem.overrideEndTime = 0;
     state.rtcMem.overrideEndTimeEstimated = false;
+    state.rtcMem.lowBatteryTime = 0;
+    state.rtcMem.lowBatteryTimeEstimated = false;
     state.rtcMem.totalOpenCount = 0;
     state.rtcMem.totalOpenDuration = 0;
     for (uint16 i = 0; i < MAX_ACTIVITIES; i++)
@@ -881,16 +941,51 @@ void ICACHE_FLASH_ATTR user_init(void)
     }
     ets_uart_printf("WARNING: time set to %02u:%02u:%02u.%03uZ %02u.%02u.%u\r\n", tms.tm_hour, tms.tm_min, tms.tm_sec, tms.tm_msec, tms.tm_mday, 1 + tms.tm_mon, 1900 + tms.tm_year);
 
-    // try to close valve
-    valveControl(&state, false, MODE_OFF, 0);
-
     // backup initial state to RTC memory
     if (!system_rtc_mem_write(64, &state.rtcMem, sizeof(state.rtcMem)))
     {
       ets_uart_printf("ERROR: writing to RTC memory failed\r\n");
     }
 
-    ets_uart_printf("Sleeper status: uptime %lu, valve %u\r\n", system_get_time()/1000, state.rtcMem.valveOpen);
+    ets_uart_printf("sleeper: uptime %lu ms, valve %s\r\n", system_get_time()/1000, state.rtcMem.valveOpen? "open" : "closed");
+  }
+
+  // check battery voltage
+  state.now = getTime();
+  if (!state.rtcMem.lowBattery && state.batteryVoltage < MIN_BATTERY_VOLTAGE)
+  {
+    // low battery condition
+    ets_uart_printf("WARNING: low battery voltage %d mV (required %d mV)\r\n", state.batteryVoltage, MIN_BATTERY_VOLTAGE);
+    state.rtcMem.lowBattery = true;
+    state.rtcMem.lowBatteryTime = state.now + LOW_BATTERY_REPORTING_DURATION;
+    state.rtcMem.lowBatteryTimeEstimated = true;
+  }
+  if (state.rtcMem.lowBattery)
+  {
+    // try to close open valve
+    if (state.rtcMem.valveOpen)
+    {
+      valveControl(&state, MODE_OFF, 0, false, false);
+    }
+
+    // backup new valve state to RTC memory
+    if (!system_rtc_mem_write(64, &state.rtcMem, sizeof(state.rtcMem)))
+    {
+      ets_uart_printf("ERROR: writing to RTC memory failed\r\n");
+    }
+
+    // enter permanent deep sleep for maximum battery lifetime after reporting duration has expired
+    if (state.now >= state.rtcMem.lowBatteryTime + LOW_BATTERY_REPORTING_DURATION)
+    {
+      ets_uart_printf("WARNING: low battery shutdown\r\n");
+
+      system_deep_sleep_set_option(RF_DISABLED);
+      system_deep_sleep_instant(0);
+    }
+    else
+    {
+      ets_uart_printf("WARNING: LOW BATTERY\r\n");
+    }
   }
 
   // wakeup caused by user?
@@ -899,7 +994,7 @@ void ICACHE_FLASH_ATTR user_init(void)
     ets_uart_printf("wakeup by user\r\n");
 
     // try to toggle valve
-    valveControl(&state, true, MODE_OFF, getTime());
+    valveControl(&state, MODE_OFF, state.now, true, false);
 
     // precompensate timekeeping for early wakeup by one runtime in case of setTime = false or no WLAN
     state.rtcMem.lastDowntime -= SLEEPER_COMMANDTIME;
@@ -990,10 +1085,10 @@ void ICACHE_FLASH_ATTR user_init(void)
   }
 
   // init state
-  wlanConnected    = false;
-  statusSent       = false;
-  readyForShutdown = false;
-  nextEventTime    = 0;
+  uplinkSocketConnected = false;
+  statusSent            = false;
+  readyForShutdown      = false;
+  nextEventTime         = 0;
 
   // register WLAN event handler
   wifi_set_event_handler_cb(wifiEventCallback);
