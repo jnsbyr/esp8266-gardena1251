@@ -123,8 +123,10 @@ typedef struct
   uint8  timeSynchronized; // bool, current time is synchronized with server
 } SleeperStateT;
 
-
 uint64 getTime();
 void comProcessing();
+
+// @see ld/eagle.rom.addr.v6.ld
+extern int ets_uart_printf(const char *format, ...);
 
 #endif /* __USER_MAIN_H__ */

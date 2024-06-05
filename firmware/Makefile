@@ -12,36 +12,42 @@
 #
 
 # project name
-TARGET = sleeper-0.9.3.0
+VERSION = 0.9.3.2
+TARGET = sleeper-${VERSION}
 
 # source subdirectories
 MODULES = user
 
 # libraries, mainly provided by the SDK
-LIBS = c m gcc hal phy pp net80211 lwip wpa crypto main json
+LIBS = c m gcc phy pp net80211 lwip wpa crypto main json
 
 # ESP8266 flash parameters (dependent on ESP8266 hardware)
-FLASHSIZE  = 4m
-FLASHPARMS = --flash_freq 40m --flash_mode qio --flash_size ${FLASHSIZE}
+#FLASHSIZE = 4m
+#FLASHMODE = qio
+FLASHSIZE = 8m
+#FLASHMODE = dio
+#FLASHSIZE = detect
+#FLASHPARMS = --flash_freq 40m --flash_mode ${FLASHMODE} --flash_size ${FLASHSIZE}
+FLASHPARMS = --flash_size ${FLASHSIZE}
 
 # flash tool parameters (dependent on PC UART hardware)
 ESPPORT = COM5
-ESPBAUD = 74880
+#ESPBAUD = 74880
 
-# Xtensa LX compiler path
+# Xtensa LX compiler path (4.5.0 for SDK < 3.0)
 XTENSA_TOOLS_ROOT ?= c:/Espressif/xtensa-lx106-elf/bin
 
 # Espressif SDK
 # SDK 1.5.3 - 18.04.2016
-# SDK 2.2.2 - 26.12.2018
-#SDK_BASE  ?= C:/Espressif/ESP8266_SDK_153
-SDK_BASE  ?= C:/Espressif/ESP8266_SDK_220
-SDK_TOOLS ?= C:/Espressif/utils
-ESPTOOL   ?= ${SDK_TOOLS}/esptool.exe
+# SDK 2.2.0 - 26.12.2018
+# SDK 2.2.1 - 27.11.2019
+SDK_BASE  ?= C:/Espressif/ESP8266_NONOS_SDK-2.2.1
+SDK_TOOLS ?= C:/Espressif/utils/ESP8266
+#ESPTOOL   ?= ${SDK_TOOLS}/esptool.exe
+ESPTOOL   ?= python C:/Espressif/esptool/esptool.py
 #ESPINITDATA = $(SDK_BINDIR)/esp_init_data_default.bin
 #ESPINITDATA = $(SDK_BINDIR)/esp_init_data_default_v08.bin
 ESPINITDATA = bin/esp_init_data_setting.bin
-
 
 #
 # Normally nothing to configure south of here.
@@ -86,7 +92,7 @@ OBJCOPY := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objcopy
 OBJDUMP := $(XTENSA_TOOLS_ROOT)/xtensa-lx106-elf-objdump
 
 # setup input and output paths as well as build objects
-INCDIR        = include 
+INCDIR        = include
 BUILD_BASE    = build
 FW_BASE       = firmware
 SDK_BINDIR    := $(addprefix $(SDK_BASE)/, $(SDK_BINDIR))
@@ -110,7 +116,7 @@ $(APP_AR): $(OBJS)
 
 # compile C source files
 $(BUILD_BASE)/%.o : %.c
-	$(CC) $(INCDIR) $(MODULE_INCDIR) $(SDK_INCDIR) $(CFLAGS) -c $< -o $@
+	$(CC) $(INCDIR) $(MODULE_INCDIR) $(SDK_INCDIR) $(CFLAGS) -DSLEEPER_VERSION=\"${VERSION}\" -c $< -o $@
 
 # check required build directories
 checkdirs: $(BUILD_DIR)
@@ -132,32 +138,42 @@ $(TARGET_OUT): $(APP_AR)
 	$(OBJCOPY) --only-section .data --output-target binary $@ eagle.app.v6.data.bin
 	$(OBJCOPY) --only-section .rodata --output-target binary $@ eagle.app.v6.rodata.bin
 	$(OBJCOPY) --only-section .irom0.text --output-target binary $@ eagle.app.v6.irom0text.bin
-	$(SDK_TOOLS)/gen_appbin.exe $@ 0 0 0 0
+	$(SDK_TOOLS)/gen_appbin.exe $@ 0 0 0 0 0
 	mv eagle.app.flash.bin $(FW_BASE)/eagle.flash.bin
 	mv eagle.app.v6.irom0text.bin $(FW_BASE)/eagle.irom0text.bin
 	rm eagle.app.v6.*
 
 flash: all
-	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+# 8Mbit / 1MB
+	$(ESPTOOL) --port $(ESPPORT) write_flash $(FLASHPARMS) \
                0x00000 $(FW_BASE)/eagle.flash.bin \
                0x10000 $(FW_BASE)/eagle.irom0text.bin
+#	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+#               0x00000 $(FW_BASE)/eagle.flash.bin \
+#               0x10000 $(FW_BASE)/eagle.irom0text.bin
 
 flash-init-data:
 ifeq ($(FLASHSIZE), 4m)
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
    	         0x7C000 $(ESPINITDATA)
-else    	           
-	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
-             0xFC000 $(ESPINITDATA)
+else
+# 8Mbit / 1MB
+	$(ESPTOOL) --port $(ESPPORT) write_flash $(FLASHPARMS) \
+	           0xFC000 $(ESPINITDATA)
+#	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+#             0xFC000 $(ESPINITDATA)
 endif
 
 flash-default-params:
 ifeq ($(FLASHSIZE), 4m)
 	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
              0x7E000 $(SDK_BINDIR)/blank.bin
-else    	           
-	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
-             0xFE000 $(SDK_BINDIR)/blank.bin
+else
+# 8Mbit / 1MB
+	$(ESPTOOL) --port $(ESPPORT) write_flash $(FLASHPARMS) \
+	           0xFE000 $(SDK_BINDIR)/blank.bin
+#	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) write_flash $(FLASHPARMS) \
+#             0xFE000 $(SDK_BINDIR)/blank.bin
 endif
 
 clean:
@@ -168,10 +184,12 @@ clean:
 	rm -rf $(FW_BASE)
 
 readFlashId:
-	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) flash_id
+	$(ESPTOOL) --port $(ESPPORT) flash_id
+#	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) flash_id
 
 readMac:
-	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) read_mac
+	$(ESPTOOL) --port $(ESPPORT) read_mac
+#	$(ESPTOOL) --port $(ESPPORT) --baud $(ESPBAUD) read_mac
 
 imageInfo:
 	$(ESPTOOL) image_info $(FW_BASE)/eagle.flash.bin

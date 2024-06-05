@@ -143,18 +143,24 @@ CHANGES
   send RSSI in SleeperRequest message (feature)
 
 0.9.1.2 - 20.04.2018
-  double timeout when using DHCP
-  report valve driver type by appending 'C' (capacitor) or 'H' (H-bridge) to version
+  double timeout when using DHCP (feature)
+  report valve driver type by appending 'C' (capacitor) or 'H' (H-bridge) to version (feature)
 
 0.9.2.0 - 27.12.2018
-  based on SDK 2.2.2-dev(d5966c3)
+  based on SDK 2.2.0-dev(d5966c3) (feature)
   skip parsing activies if program ID is zero or program ID has not changed (bugfix)
 
 0.9.3.0 - 30.12.2018
-  permanent deep sleep after low battery detection and reporting
-  capacitor valve driver: 
-  - monitor valve control voltage to detect wiring errors (e.g. valve not connected, 
-    connector corroded, etc.) and to reduce operating time 
+  permanent deep sleep after low battery detection and reporting (feature)
+  capacitor valve driver (feature):
+  - monitor valve control voltage to detect wiring errors (e.g. valve not connected,
+    connector corroded, etc.) and to reduce operating time
   - disable remote valve operation after detecting valve operation error
   - report valve operation error via mode property in server request
-  - max. valve resistance configurable via server reply 
+  - max. valve resistance configurable via server reply
+
+0.9.3.1 - 27.01.2019
+  allow valve control after user wakeup in low battery state (feature)
+
+0.9.3.2 - 27.11.2019
+  based on Espressif SDK 2.2.1 (feature)

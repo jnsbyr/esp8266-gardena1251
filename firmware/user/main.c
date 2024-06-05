@@ -64,7 +64,7 @@
 #include "valve.h"
 #include "uplink.h"
 
-#define VERSION "0.9.3.0"
+#define VERSION SLEEPER_VERSION
 
 // manual start/stop GPIO input
 #define USER_WAKEUP_GPIO_MUX PERIPHS_IO_MUX_MTMS_U
@@ -951,6 +951,7 @@ void ICACHE_FLASH_ATTR user_init()
   }
 
   // check battery voltage
+  bool userWakeup = isUserWakeup();
   state.now = getTime();
   if (!state.rtcMem.lowBattery && state.batteryVoltage < MIN_BATTERY_VOLTAGE)
   {
@@ -975,7 +976,7 @@ void ICACHE_FLASH_ATTR user_init()
     }
 
     // enter permanent deep sleep for maximum battery lifetime after reporting duration has expired
-    if (state.now >= state.rtcMem.lowBatteryTime + LOW_BATTERY_REPORTING_DURATION)
+    if (!userWakeup && state.now >= state.rtcMem.lowBatteryTime + LOW_BATTERY_REPORTING_DURATION)
     {
       ets_uart_printf("WARNING: low battery shutdown\r\n");
 
@@ -989,7 +990,7 @@ void ICACHE_FLASH_ATTR user_init()
   }
 
   // wakeup caused by user?
-  if (isUserWakeup())
+  if (userWakeup)
   {
     ets_uart_printf("wakeup by user\r\n");
 

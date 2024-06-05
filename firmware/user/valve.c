@@ -190,7 +190,7 @@ LOCAL void ICACHE_FLASH_ATTR valveOpen(SleeperStateT* sleeperState)
         ets_uart_printf("valve: resistance %u ohm after %lu us\r\n", resistance, duration);
       }
     } while (duration < timeout);
-    ets_uart_printf("valve: charged %u -> %u mV in %lu us\r\n", dischargedVoltage, chargedVoltage, duration);
+    ets_uart_printf("valve: charged %u -> %u mV @ %s in %lu us\r\n", dischargedVoltage, chargedVoltage, supplyVolage, duration);
 
     // disable power to valve and disable generator
     GPIO_DIS_OUTPUT(OPEN_VALVE_GPIO);
