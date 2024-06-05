@@ -1,0 +1,62 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks":[
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "cd firmware; /c/MinGW/msys/1.0/bin/make clean",
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true
+            },
+            "icon": {
+                "id": "check"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "compile",
+            "type": "shell",
+            "command": "cd firmware; /c/MinGW/msys/1.0/bin/make all",
+            "group": "build",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true
+            },
+            "icon": {
+                "id": "check"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "upload",
+            "type": "shell",
+            "command": "cd firmware; /c/MinGW/msys/1.0/bin/make flash",
+            "group": "test",
+            "isBackground": false,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true
+            },
+            "icon": {
+                "id": "arrow-up"
+            },
+            "dependsOn":["closeSerialMonitor"],
+            "problemMatcher": []
+        },
+    ]
+}
